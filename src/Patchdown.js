@@ -1,5 +1,3 @@
-import * as jsyaml from 'js-yaml';
-
 export const replaceEffectImpl = function (just) {
   return function (nothing) {
     return function (r) {
@@ -22,10 +20,3 @@ export const replaceEffectImpl = function (just) {
   };
 };
 
-export const yamlToJson = (yaml) => () => {
-  return jsyaml.load(yaml);
-};
-
-export const printYaml = (json) => () => {
-  return jsyaml.dump(json);
-}

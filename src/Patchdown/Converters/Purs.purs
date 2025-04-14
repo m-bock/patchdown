@@ -3,13 +3,18 @@ module Patchdown.Converters.Purs where
 import Prelude
 
 import Control.Monad.Error.Class (liftMaybe, throwError)
+import Data.Argonaut (class EncodeJson, encodeJson, stringifyWithIndent)
+import Data.Array (mapMaybe)
+import Data.Array as Array
 import Data.Codec.Argonaut (JsonCodec)
 import Data.Codec.Argonaut as CA
 import Data.Codec.Argonaut.Record as CAR
+import Data.Filterable (filter)
 import Data.Foldable (findMap, foldMap, for_)
 import Data.Map (Map)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe, maybe)
+import Data.Show (class ShowRecordFields)
 import Data.String as Str
 import Data.Traversable (for)
 import Effect (Effect)
@@ -17,7 +22,9 @@ import Effect.Exception as Exc
 import Effect.Ref as Ref
 import Node.Encoding (Encoding(..))
 import Node.FS.Sync (readTextFile)
-import Patchdown.Types (Converter, mkConverter)
+import Patchdown.Types (Converter, codeBlock, mkConverter, printYaml)
+import Prim.Row (class Nub)
+import Prim.RowList (class RowToList)
 import PureScript.CST (RecoveredParserResult(..))
 import PureScript.CST (parseModule) as CST
 import PureScript.CST.Errors (printParseError)
@@ -79,7 +86,7 @@ convertPursType cache { filePath, ident } = do
             DeclType a@{ name: Name { name: Proper name } } b c | name == ident -> Just (DeclType a { keyword = removeLeadingComments a.keyword } b c)
             _ -> Nothing
         )
-    # liftMaybe (Exc.error "no type found")
+    # liftMaybe (Exc.error $ f "no type found" { ident })
 
   let ret = foldMap Print.printSourceToken (TokenList.toArray (tokensOf decl))
 
@@ -120,6 +127,14 @@ convertVal cache { filePath, idents } = do
     ( \ident -> do
 
         let
+          names = decls
+            # Array.mapMaybe
+                ( \decl -> case decl of
+                    DeclSignature (Labeled { label: Name { name: Ident name } }) -> Just name
+                    _ -> Nothing
+                )
+
+        let
           maySigCst = decls
             # findMap
                 ( case _ of
@@ -133,7 +148,7 @@ convertVal cache { filePath, idents } = do
                   DeclValue { name: Name { name: Ident name } } | name == ident -> Just decl
                   _ -> Nothing
               )
-          # liftMaybe (Exc.error "no value found")
+          # liftMaybe (Exc.error $ f "no value found" { ident, names })
 
         pure $ Str.joinWith ""
           [ maybe "" printTokens maySigCst # Str.trim
@@ -153,6 +168,9 @@ codecPursValOpts = CAR.object "PursValOpts"
   }
 
 ---
+
+f :: forall a. EncodeJson a => String -> a -> String
+f str val = str <> "\n\n" <> printYaml (encodeJson val)
 
 type PursSigOpts =
   { filePath :: String
@@ -177,6 +195,15 @@ convertSig cache { filePath, ident, dropIdent, dropType, moduleAlias, prefix } =
 
   let decls = getDecls cst
 
+  let
+    names = decls
+      # Array.mapMaybe
+          ( \decl -> case decl of
+              DeclSignature (Labeled { label: Name { name: Ident name } }) -> Just name
+              DeclForeign _ _ (ForeignValue (Labeled { label: Name { name: Ident name } })) -> Just name
+              _ -> Nothing
+          )
+
   typeCst <- decls
     # findMap
         ( case _ of
@@ -184,7 +211,7 @@ convertSig cache { filePath, ident, dropIdent, dropType, moduleAlias, prefix } =
             DeclForeign _ _ (ForeignValue (Labeled { label: Name { name }, value })) | name == Ident ident -> Just value
             _ -> Nothing
         )
-    # liftMaybe (Exc.error "no value found")
+    # liftMaybe (Exc.error $ f "no signature found" { ident, names })
 
   let typeStr = printTokens typeCst
 
@@ -232,9 +259,6 @@ getModuleCst content = case CST.parseModule content of
 
 inTicks :: String -> String
 inTicks str = "`" <> str <> "`"
-
-codeBlock :: String -> String -> String
-codeBlock lang str = "\n```" <> lang <> "\n" <> str <> "\n```\n"
 
 getDecls :: Module Void -> Array (Declaration Void)
 getDecls (Module { body: ModuleBody { decls } }) = decls

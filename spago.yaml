@@ -1,6 +1,7 @@
 package:
   name: patchdown
   dependencies:
+    - argonaut
     - debug
     - filterable
     - argonaut-core: ">=7.0.0 <8.0.0"
