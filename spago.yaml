@@ -5,7 +5,7 @@ package:
     - debug
     - filterable
     - argonaut-core: ">=7.0.0 <8.0.0"
-    - codec-argonaut: ">=10.0.0 <11.0.0"
+    - codec-argonaut
     - console: ">=6.1.0 <7.0.0"
     - effect: ">=4.0.0 <5.0.0"
     - exists: ">=6.0.0 <7.0.0"
@@ -19,4 +19,20 @@ package:
 workspace:
   packageSet:
     registry: 64.0.0
-  extraPackages: {}
+  extraPackages:
+    codec-argonaut: 
+      git: https://github.com/m-bock/purescript-codec-argonaut.git
+      ref: dc287c83b79f86f8d9a0045dcb740f0cf9d23ccd
+      dependencies:
+        - argonaut-codecs
+        - argonaut-core
+        - codec
+        - console
+        - effect
+        - foreign-object
+        - ordered-collections
+        - prelude
+        - quickcheck
+        - type-equality
+        - variant
+

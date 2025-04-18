@@ -1,4 +1,4 @@
-module Patchdown.Types where
+module Patchdown.Common where
 
 import Prelude
 

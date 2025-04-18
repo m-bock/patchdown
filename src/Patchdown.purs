@@ -22,7 +22,7 @@ import Node.Process (lookupEnv)
 import Partial.Unsafe (unsafeCrashWith)
 import Patchdown.Converters.Purs (mkPursConverters)
 import Patchdown.Converters.Raw (converterRaw)
-import Patchdown.Types (Converter, codeBlock, printYaml, runConverter, yamlToJson)
+import Patchdown.Common (Converter, codeBlock, printYaml, runConverter, yamlToJson)
 
 type Opts =
   { filePath :: String
@@ -61,7 +61,6 @@ replaceFn converterMap match matches = do
 run :: Opts -> Effect Unit
 run { filePath, converters } = do
   content <- readTextFile UTF8 filePath
-  --log content
 
   reg <- regex "<!-- PATCH_START ([a-zA-Z0-9_]+)\\s([\\s\\S]*?)-->[\\s\\S]*?<!-- END -->" RegFlags.global
     # lmap (\_ -> error "invalid regex")

@@ -8,7 +8,7 @@ import Data.Codec.Argonaut.Record as CAR
 import Effect (Effect)
 import Node.Encoding (Encoding(..))
 import Node.FS.Sync (readTextFile)
-import Patchdown.Types (Converter, mkConverter)
+import Patchdown.Common (Converter, mkConverter)
 
 type Opts =
   { filePath :: String
