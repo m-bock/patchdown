@@ -48,7 +48,7 @@ replacePdSection
      )
   -> Effect String
 replacePdSection content replaceFn = do
-  let regexStr = mkStartTag "([a-zA-Z0-9_]+)(\\!?)\\s([\\s\\S]*?)" <> "[\\s\\S]*?" <> endTag
+  let regexStr = mkStartTag "([a-zA-Z0-9_]*)(\\!?)\\s([\\s\\S]*?)" <> "[\\s\\S]*?" <> endTag
 
   reg <- regex regexStr RegFlags.global
     # lmap (\_ -> error "invalid regex")
@@ -73,19 +73,19 @@ data Err
   | InvalidConverter { json :: Json }
   | ConverterError { newYamlStr :: String, err :: String }
 
-f :: forall e m a. MonadEffect m => MonadError e m => (Error -> e) -> Effect a -> m a
-f mpErr eff = do
+mapErrEff :: forall e m a. MonadEffect m => MonadError e m => (Error -> e) -> Effect a -> m a
+mapErrEff mpErr eff = do
   ret :: Either Error a <- liftEffect (try eff)
   case ret of
     Left err -> throwError (mpErr err)
     Right val -> pure val
 
-foo
+getReplacement
   :: Map String Converter
   -> { converterName :: String, yamlStr :: String, enable :: Boolean }
   -> ExceptT Err Effect { newYamlStr :: String, newContent :: String }
-foo converterMap { converterName, yamlStr, enable } = do
-  json <- yamlToJson yamlStr # f \err -> InvalidYaml { err: message err }
+getReplacement converterMap { converterName, yamlStr, enable } = do
+  json <- yamlToJson yamlStr # mapErrEff \err -> InvalidYaml { err: message err }
 
   converter <- Map.lookup converterName converterMap
     # liftMaybe (InvalidConverter { json })
@@ -98,7 +98,7 @@ foo converterMap { converterName, yamlStr, enable } = do
 
         newContent <-
           if enable then
-            convert { opts } # f (\err -> ConverterError { newYamlStr, err: message err })
+            convert { opts } # mapErrEff (\err -> ConverterError { newYamlStr, err: message err })
           else
             pure ""
 
@@ -108,32 +108,38 @@ foo converterMap { converterName, yamlStr, enable } = do
 
 run :: Opts -> Effect Unit
 run { filePath, converters } = do
-  log $ print "#run" { filePath, converters: map (\c -> runConverter c _.name) converters }
+  let converterMap = converters # map (\c -> runConverter c _.name /\ c) # Map.fromFoldable
+  let converterNames = Map.keys converterMap
+
+  log $ print "#run" { filePath, converterNames }
 
   fileContent <- readTextFile UTF8 filePath
 
-  let converterMap = converters # map (\c -> runConverter c _.name /\ c) # Map.fromFoldable
-
-  patchedFileContent <- replacePdSection fileContent $ \opts@{ converterName, yamlStr } -> do
-    ret <- runExceptT $ foo converterMap opts
-    pure case ret of
-      Left (InvalidYaml { err }) ->
-        { newYamlStr: yamlStr
-        , newContent: mkErrorContent converterName err
-        }
-      Left (InvalidOptions { json, err }) ->
-        { newYamlStr: printYaml json
-        , newContent: mkErrorContent converterName (printJsonDecodeError err)
-        }
-      Left (InvalidConverter { json }) ->
-        { newYamlStr: printYaml json
-        , newContent: mkErrorContent converterName "Converter not found"
-        }
-      Left (ConverterError { newYamlStr, err }) ->
-        { newYamlStr
-        , newContent: mkErrorContent converterName err
-        }
-      Right val -> val
+  patchedFileContent <-
+    replacePdSection fileContent \opts@{ converterName, yamlStr } -> do
+      ret <- runExceptT $ getReplacement converterMap opts
+      
+      pure case ret of
+        Left (InvalidYaml { err }) ->
+          { newYamlStr: yamlStr
+          , newContent: mkErrorContent converterName err
+          }
+        Left (InvalidOptions { json, err }) ->
+          { newYamlStr: printYaml json
+          , newContent: mkErrorContent converterName (printJsonDecodeError err)
+          }
+        Left (InvalidConverter { json }) ->
+          { newYamlStr: printYaml json
+          , newContent: mkErrorContent converterName $ print "Converter not found"
+              { converterName
+              , converterNames
+              }
+          }
+        Left (ConverterError { newYamlStr, err }) ->
+          { newYamlStr
+          , newContent: mkErrorContent converterName err
+          }
+        Right val -> val
 
   writeTextFile UTF8 filePath patchedFileContent
 

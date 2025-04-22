@@ -12,7 +12,5 @@ export const yamlToJson = (yaml) => () => {
 };
 
 export const printYaml = (json) => {
-  return jsyaml.dump(json, {
-    forceQuotes: true
-  });
+  return jsyaml.dump(json);
 };
