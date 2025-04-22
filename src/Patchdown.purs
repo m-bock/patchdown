@@ -180,7 +180,7 @@ errorBox_ :: String -> String -> String
 errorBox_ sectionName message = errorBoxImpl sectionName message Nothing
 
 errorBoxImpl :: String -> String -> Maybe Json -> String
-errorBoxImpl sectionName message val = mdQuote $ Str.joinWith "\n"
+errorBoxImpl sectionName message val = wrapNl $ mdQuote $ Str.joinWith "\n"
   [ "<br>"
   , "🛑 Error at section `" <> sectionName <> "`"
   , ""
@@ -190,3 +190,6 @@ errorBoxImpl sectionName message val = mdQuote $ Str.joinWith "\n"
        Nothing -> ""
   , "<br>"
   ]
+
+wrapNl :: String -> String
+wrapNl str = "\n" <> str <> "\n"
