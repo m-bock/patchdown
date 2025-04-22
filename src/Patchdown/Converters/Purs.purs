@@ -7,18 +7,20 @@ import Control.Monad.Error.Class (throwError)
 import Data.Argonaut.Core (Json)
 import Data.Array as Array
 import Data.Codec (Codec, Codec')
-import Data.Codec.Argonaut (JPropCodec, JsonCodec, JsonDecodeError(..))
+import Data.Codec.Argonaut (JPropCodec, JsonCodec, JsonDecodeError)
 import Data.Codec.Argonaut as CA
 import Data.Codec.Argonaut.Record as CAR
 import Data.Codec.Argonaut.Sum as CAS
-import Data.Either (Either(..), note)
+import Data.Either (Either)
 import Data.Foldable (foldMap)
 import Data.Generic.Rep (class Generic)
 import Data.List (List)
 import Data.Map (Map)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe)
+import Data.String (Pattern(..), Replacement(..), replace)
 import Data.String as Str
+import Data.String.Extra (snakeCase)
 import Data.Symbol (class IsSymbol)
 import Data.Traversable (for)
 import Data.Tuple.Nested (type (/\))
@@ -28,7 +30,6 @@ import Effect.Ref as Ref
 import Foreign.Object (Object)
 import Node.Encoding (Encoding(..))
 import Node.FS.Sync as NodeFS
-import Node.Path (FilePath)
 import Patchdown.Common (Converter, codeBlock, mkConverter)
 import Prim.Row (class Cons, class Nub, class Union)
 import PureScript.CST (RecoveredParserResult(..), parseModule)
@@ -208,12 +209,12 @@ getWrapFn { split, inline } =
     }
 
 convert :: Cache -> { opts :: Opts } -> Effect String
-convert cache { opts: opts@{ filePath, pick, split, inline } } = do
+convert cache { opts: opts@{ pick } } = do
   let { wrapInner, wrapOuter } = getWrapFn opts
 
   items :: (Array String) <- join <$> for pick
     ( \{ pick, filePath, prefix } -> do
-        sources <- cache.getCst (fromMaybe "src/Main.purs" filePath)
+        sources <- cache.getCst (fromMaybe "src/Main.purs" (filePath <|> opts.filePath))
         let results = sources >>= matchOnePick pick
 
         let
@@ -240,27 +241,30 @@ codecOpts = CA.object "Opts" $
     # fieldWithDefault @"inline" false
     # fieldWithDefault @"pick" []
 
+mkPickItem :: Pick -> PickItem
+mkPickItem pick =
+  { filePath: Nothing
+  , prefix: Nothing
+  , pick
+  }
+
 codecPickItem :: JsonCodec PickItem
 codecPickItem = CA.codec' dec enc
   where
   dec j =
     ( do
         pick <- CA.decode codecPick j
-        pure
-          { filePath: Nothing
-          , prefix: Nothing
-          , pick
-          }
+        pure $ mkPickItem pick
     ) <|> CA.decode codecCanonical j
 
   enc val =
-    if val == { filePath: Nothing, prefix: Nothing, pick: val.pick } then
+    if val == mkPickItem val.pick then
       CA.encode codecPick val.pick
     else
       CA.encode codecCanonical val
 
   codecCanonical =
-    CAR.object ""
+    CAR.object "PickItem"
       { filePath: CAR.optional CA.string
       , pick: codecPick
       , prefix: CAR.optional CA.string
@@ -269,38 +273,43 @@ codecPickItem = CA.codec' dec enc
 codecPick :: JsonCodec Pick
 codecPick = CA.codec' dec enc
   where
-  can = CAS.sum ""
-    { "PickImport": CAR.object "PickImport"
+  can :: JsonCodec Pick
+  can = CAS.sumFlatWith
+    CAS.defaultFlatEncoding
+      { mapTag = replace (Pattern "Pick") (Replacement "") >>> snakeCase
+      }
+    "Pick"
+    { "PickImport": CAR.record
         { moduleName: CAR.optional CA.string
         }
-    , "PickData": CAR.object "PickData"
+    , "PickData": CAR.record
         { name: CA.string
         }
-    , "PickNewtype": CAR.object "PickNewtype"
+    , "PickNewtype": CAR.record
         { name: CA.string
         }
-    , "PickType": CAR.object "PickType"
+    , "PickType": CAR.record
         { name: CA.string
         }
-    , "PickSignature": CAR.object "PickSignature"
+    , "PickSignature": CAR.record
         { name: CA.string
         }
-    , "PickForeign": CAR.object "PickForeign"
+    , "PickForeign": CAR.record
         { name: CA.string
         }
-    , "PickValue": CAR.object "PickValue"
+    , "PickValue": CAR.record
         { name: CA.string
         }
-    , "PickExtraTypeRecord": CAR.object "PickExtraTypeRecord"
+    , "PickExtraTypeRecord": CAR.record
         { name: CA.string
         }
-    , "PickExtraSignatureOrForeign": CAR.object "PickExtraSignatureOrForeign"
+    , "PickExtraSignatureOrForeign": CAR.record
         { name: CA.string
         }
-    , "PickExtraValueAndSignature": CAR.object "PickExtraValueAndSignature"
+    , "PickExtraValueAndSignature": CAR.record
         { name: CA.string
         }
-    , "PickExtraAny": CAR.object "PickExtraAny"
+    , "PickExtraAny": CAR.record
         { name: CA.string
         }
     }

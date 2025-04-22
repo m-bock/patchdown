@@ -2,10 +2,11 @@ package:
   name: patchdown
   dependencies:
     - argonaut
+    - codec-argonaut
     - debug
     - filterable
+    - strings-extra
     - argonaut-core: ">=7.0.0 <8.0.0"
-    - codec-argonaut
     - console: ">=6.1.0 <7.0.0"
     - effect: ">=4.0.0 <5.0.0"
     - exists: ">=6.0.0 <7.0.0"
@@ -20,7 +21,7 @@ workspace:
   packageSet:
     registry: 64.0.0
   extraPackages:
-    codec-argonaut: 
+    codec-argonaut:
       git: https://github.com/m-bock/purescript-codec-argonaut.git
       ref: 78b0171958a4f21ed23946fe7e574ea5018902d9
       dependencies:
@@ -35,4 +36,3 @@ workspace:
         - quickcheck
         - type-equality
         - variant
-
