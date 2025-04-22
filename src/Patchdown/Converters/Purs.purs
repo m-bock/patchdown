@@ -82,7 +82,7 @@ type Opts =
   }
 
 type PickItem =
-  { filePath :: String
+  { filePath :: Maybe String
   , prefix :: String
   , pick :: Pick
   }
@@ -115,6 +115,8 @@ data Pick
   | PickExtraAny
       { name :: String
       }
+
+derive instance Eq Pick
 
 -- PickModuleHeader
 -- PickClass { name :: String, filePath :: Maybe String }
@@ -211,7 +213,7 @@ convert cache { opts: opts@{ filePath, pick, split, inline } } = do
 
   items :: (Array String) <- join <$> for pick
     ( \{ pick, filePath, prefix } -> do
-        sources <- cache.getCst filePath
+        sources <- cache.getCst (fromMaybe "src/Main.purs" filePath)
         let results = sources >>= matchOnePick pick
 
         pure $ map ((prefix <> _) <<< wrapInner) results
@@ -223,32 +225,18 @@ convert cache { opts: opts@{ filePath, pick, split, inline } } = do
 
 codecOpts :: JsonCodec Opts
 codecOpts = CA.object "Opts" $
-  sequentialCodec
-    ( CAR.record
-        { filePath: CAR.optional CA.string
-        }
-        # fieldDimap @"filePath"
-            (\m -> Just $ fromMaybe ("src/Main.purs") m)
-            identity
-    )
-    ( \{ filePath } ->
-        CAR.record
-          { pick: CAR.optional (oneOrMany $ codecPickItem { filePath })
-          , inline: CAR.optional CA.boolean
-          , split: CAR.optional CA.boolean
-          }
-          # fieldWithDefault @"split" false
-          # fieldWithDefault @"inline" false
-          # fieldWithDefault @"pick" []
-    )
+  CAR.record
+    { filePath: CAR.optional CA.string
+    , pick: CAR.optional (oneOrMany codecPickItem)
+    , inline: CAR.optional CA.boolean
+    , split: CAR.optional CA.boolean
+    }
+    # fieldWithDefault @"split" false
+    # fieldWithDefault @"inline" false
+    # fieldWithDefault @"pick" []
 
-codecPickItem :: { filePath :: Maybe FilePath } -> JsonCodec PickItem
-codecPickItem { filePath } = CA.codec' dec enc
-  # fieldCompose @"filePath"
-      ( case filePath of
-          Just fp -> CA.codec' (fromMaybe fp >>> Right) Just
-          Nothing -> CA.codec' (note $ TypeMismatch "") Just
-      )
+codecPickItem :: JsonCodec PickItem
+codecPickItem = CA.codec' dec enc
   # fieldWithDefault @"prefix" ""
   where
   dec j =
@@ -262,9 +250,10 @@ codecPickItem { filePath } = CA.codec' dec enc
     ) <|> CA.decode codecCanonical j
 
   enc val =
-    case val of
-      { filePath: Nothing, prefix: Nothing } -> CA.encode codecPick val.pick
-      _ -> CA.encode codecCanonical val
+    if val == { filePath: Nothing, prefix: Nothing, pick: val.pick } then
+      CA.encode codecPick val.pick
+    else
+      CA.encode codecCanonical val
 
   codecCanonical =
     CAR.object ""
