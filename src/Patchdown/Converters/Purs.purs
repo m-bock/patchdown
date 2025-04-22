@@ -181,14 +181,14 @@ matchOnePick pick decl = case pick of
   PickImport _ -> []
   PickData { name } -> case decl of
     SrcDecl all@(CST.DeclData r _)
-      | name == getNameProper r.name -> [ printTokens all ]
+      | name == getNameProper r.name -> [ printTokens all <> "\n" ]
     _ -> []
 
   PickNewtype { name } -> [] -- TODO
 
   PickType { name } -> case decl of
     SrcDecl all@(CST.DeclType r _ _)
-      | name == getNameProper r.name -> [ printTokens all ]
+      | name == getNameProper r.name -> [ printTokens all <> "\n" ]
     _ -> []
 
   PickSignature { name } -> case decl of
@@ -200,7 +200,7 @@ matchOnePick pick decl = case pick of
 
   PickValue { name } -> case decl of
     SrcDecl all@(CST.DeclValue r)
-      | name == getNameIdent r.name -> [ printTokens all ]
+      | name == getNameIdent r.name -> [ printTokens all <> "\n" ]
     _ -> []
 
   PickExtraTypeRecord { name } -> [] -- TODO
@@ -213,7 +213,7 @@ matchOnePick pick decl = case pick of
       decl
 
   PickExtraSignatureOrForeign { name } ->
-    pure $ Str.joinWith "\n" $ matchManyPicks
+    matchManyPicks
       [ PickSignature { name }
       , PickForeign { name }
       ]
