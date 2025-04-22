@@ -83,7 +83,7 @@ type Opts =
 
 type PickItem =
   { filePath :: Maybe String
-  , prefix :: String
+  , prefix :: Maybe String
   , pick :: Pick
   }
 
@@ -216,7 +216,12 @@ convert cache { opts: opts@{ filePath, pick, split, inline } } = do
         sources <- cache.getCst (fromMaybe "src/Main.purs" filePath)
         let results = sources >>= matchOnePick pick
 
-        pure $ map ((prefix <> _) <<< wrapInner) results
+        let
+          addPrefix val = case prefix of
+            Just p -> (p <> val)
+            Nothing -> val
+
+        pure $ map (addPrefix <<< wrapInner) results
     )
 
   pure $ wrapOuter (Str.joinWith "\n\n" items)
@@ -237,7 +242,6 @@ codecOpts = CA.object "Opts" $
 
 codecPickItem :: JsonCodec PickItem
 codecPickItem = CA.codec' dec enc
-  # fieldWithDefault @"prefix" ""
   where
   dec j =
     ( do
