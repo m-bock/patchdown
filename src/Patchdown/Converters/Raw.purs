@@ -18,7 +18,7 @@ converterRaw :: Converter
 converterRaw = mkConverter
   { name: "raw"
   , description: "Raw converter"
-  , decodeJson: CA.decode codecOpts
+  , codecJson: codecOpts
   , convert: \{ opts } -> convert opts
   }
 

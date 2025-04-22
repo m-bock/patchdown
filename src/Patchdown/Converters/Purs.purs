@@ -1,345 +1,423 @@
-module Patchdown.Converters.Purs
-  ( mkPursConverters
-  ) where
+module Patchdown.Converters.Purs where
 
 import Prelude
 
-import Control.Monad.Error.Class (liftMaybe, throwError)
-import Data.Argonaut (class EncodeJson, Json, encodeJson)
+import Control.Alt ((<|>))
+import Control.Monad.Error.Class (throwError)
+import Data.Argonaut.Core (Json)
 import Data.Array as Array
-import Data.Codec.Argonaut (JsonCodec, prismaticCodec)
+import Data.Codec (Codec, Codec')
+import Data.Codec.Argonaut (JPropCodec, JsonCodec, JsonDecodeError(..))
 import Data.Codec.Argonaut as CA
 import Data.Codec.Argonaut.Record as CAR
-import Data.Either (hush)
-import Data.Foldable (findMap, foldMap)
+import Data.Codec.Argonaut.Sum as CAS
+import Data.Either (Either(..), note)
+import Data.Foldable (foldMap)
+import Data.Generic.Rep (class Generic)
+import Data.List (List)
 import Data.Map (Map)
 import Data.Map as Map
-import Data.Maybe (Maybe(..), fromMaybe, maybe)
+import Data.Maybe (Maybe(..), fromMaybe)
 import Data.String as Str
+import Data.Symbol (class IsSymbol)
 import Data.Traversable (for)
-import Data.Tuple (snd)
-import Data.Tuple.Nested ((/\))
+import Data.Tuple.Nested (type (/\))
 import Effect (Effect)
 import Effect.Exception as Exc
 import Effect.Ref as Ref
 import Foreign.Object (Object)
-import Foreign.Object as Obj
 import Node.Encoding (Encoding(..))
-import Node.FS.Sync (readTextFile)
-import Patchdown.Common (Converter, codeBlock, mkConverter, printYaml)
-import PureScript.CST (RecoveredParserResult(..))
-import PureScript.CST (parseModule) as CST
-import PureScript.CST.Errors (printParseError)
+import Node.FS.Sync as NodeFS
+import Node.Path (FilePath)
+import Patchdown.Common (Converter, codeBlock, mkConverter)
+import Prim.Row (class Cons, class Nub, class Union)
+import PureScript.CST (RecoveredParserResult(..), parseModule)
+import PureScript.CST.Errors as CSTErr
 import PureScript.CST.Print as Print
 import PureScript.CST.Range (class TokensOf, tokensOf)
 import PureScript.CST.Range.TokenList as TokenList
-import PureScript.CST.Types (Declaration(..), Foreign(..), Ident(..), Label(..), Labeled(..), Module(..), ModuleBody(..), Name(..), Proper(..), Row(..), Separated(..), SourceToken, Type(..), Wrapped(..))
+import PureScript.CST.Types as CST
+import Record as Record
+import Type.Prelude (Proxy(..))
+import Unsafe.Coerce (unsafeCoerce)
 
-type Cache = { getCst :: String -> Effect (Module Void) }
+type Cache = { getCst :: String -> Effect (Array Source) }
 
-mkCache :: Effect Cache
-mkCache = do
-  refCache <- Ref.new (Map.empty :: Map String (Module Void))
-  pure
-    { getCst: \filePath -> do
-        cache <- Ref.read refCache
-        case Map.lookup filePath cache of
-          Just cst -> pure cst
-          Nothing -> do
-            content <- readTextFile UTF8 filePath
-            cst <- getModuleCst content
-            Ref.modify_ (Map.insert content cst) refCache
-            pure cst
-    }
+inTicks :: String -> String
+inTicks str = "`" <> str <> "`"
 
-mkPursConverters :: Effect (Array Converter)
-mkPursConverters = do
-  cache <- mkCache
-  pure
-    [ converterPursSig cache
-    , converterPursVal cache
-    , converterPursType cache
-    , converterPursRecord cache
-    ]
-
----
-
-type PursRecordOpts =
-  { filePath :: String
-  , ident :: String
-  , descriptions :: Object String
-  }
-
-converterPursRecord :: Cache -> Converter
-converterPursRecord cache = mkConverter
-  { name: "pursRecord"
-  , description: "PureScript record converter"
-  , decodeJson: CA.decode codecPursRecordOpts
-  , convert: \{ opts: { filePath, ident, descriptions } } -> do
-      cst <- cache.getCst filePath
-
-      let decls = getDecls cst
-
-      (cstHead /\ _ /\ cstType) <- decls
-        # findMap
-            ( \decl -> case decl of
-                DeclType a@{ name: Name { name: Proper name } } b c | name == ident -> Just (a /\ b /\ c)
-                _ -> Nothing
-            )
-        # liftMaybe (Exc.error $ print "no type found" { ident })
-
-      pure case cstType of
-        TypeRecord (Wrapped { value: Row { labels: Just (Separated { head, tail }) } }) ->
-          let
-            fields = ([ head ] <> map snd tail)
-              # map
-                  ( \(Labeled { label: Name { name: Label name }, value }) ->
-                      { field: name
-                      , typeSig: printTokens value
-                      , description: Obj.lookup name descriptions
-                      }
-                  )
-          in
-            Str.joinWith "\n" $ join
-              [ pure "\n"
-              , pure ("#### `type " <> printTokens cstHead.name <> printTokens cstHead.vars <> "= {...}`")
-              , mkTable (join $ map mkRow fields)
-              ]
-        _ -> "err"
-  }
-
-mkTable :: Array String -> Array String
-mkTable children = join
-  [ pure "<table>"
-  , pure "  <tr>"
-  , pure "    <th align='left'>Field</th>"
-  , pure "    <th align='left'>Type</th>"
-  , pure "    <th align='left'>Description</th>"
-  , pure "  </tr>"
-  , children
-  , pure "</table>"
-  ]
-
-mkRow :: { field :: String, typeSig :: String, description :: Maybe String } -> Array String
-mkRow { field, typeSig, description } = do
-  [ "  <tr>"
-  , "    <td valign='top'>"
-  , "      <code>" <> field <> "</code>"
-  , "    </td>"
-  , "    <td valign='top'>"
-  , "      <code>" <> typeSig <> "</code>"
-  , "    </td>"
-  , "    <td valign='top'>" <> fromMaybe "" description <> "</td>"
-  , "  </tr>"
-  ]
-
-codecPursRecordOpts :: JsonCodec PursRecordOpts
-codecPursRecordOpts = CAR.object "PursRecordOpts"
-  { filePath: CA.string
-  , ident: CA.string
-  , descriptions: CAR.optionalWith (fromMaybe Obj.empty) Just (codecObj CA.string)
-  }
-
-codecObj :: forall a. JsonCodec a -> JsonCodec (Object a)
-codecObj codec = prismaticCodec "obj" print g CA.jobject
-  where
-  print :: Object Json -> Maybe (Object a)
-  print obj = for obj \j -> hush $ CA.decode codec j
-
-  g :: Object a -> Object Json
-  g = map (CA.encode codec)
-
----
-
-type PursTypeOpts =
-  { filePath :: String
-  , ident :: String
-  }
-
-converterPursType :: Cache -> Converter
-converterPursType cache = mkConverter
-  { name: "pursType"
-  , description: "PureScript type converter"
-  , decodeJson: CA.decode codecPursTypeOpts
-  , convert: \{ opts: { filePath, ident } } -> do
-      cst <- cache.getCst filePath
-
-      let Module { body: ModuleBody { decls } } = cst
-
-      decl <- decls
-        # findMap
-            ( \decl -> case decl of
-                DeclType a@{ name: Name { name: Proper name } } b c | name == ident -> Just (DeclType a { keyword = removeLeadingComments a.keyword } b c)
-                _ -> Nothing
-            )
-        # liftMaybe (Exc.error $ print "no type found" { ident })
-
-      let ret = foldMap Print.printSourceToken (TokenList.toArray (tokensOf decl))
-
-      pure $ codeBlock "purescript" ret
-  }
-
-codecPursTypeOpts :: JsonCodec PursTypeOpts
-codecPursTypeOpts = CAR.object "PursTypeOpts"
-  { filePath: CA.string
-  , ident: CA.string
-  }
-
-removeLeadingComments :: SourceToken -> SourceToken
-removeLeadingComments all =
-  all { leadingComments = [] }
-
----
-
-type PursValOpts =
-  { filePath :: String
-  , idents :: Array String
-  }
-
-converterPursVal :: Cache -> Converter
-converterPursVal cache = mkConverter
-  { name: "pursVal"
-  , description: "PureScript value converter"
-  , decodeJson: CA.decode codecPursValOpts
-  , convert: \{ opts: { filePath, idents } } -> do
-      cst <- cache.getCst filePath
-
-      let decls = getDecls cst
-
-      items <- for idents
-        ( \ident -> do
-
-            let
-              names = decls
-                # Array.mapMaybe
-                    ( \decl -> case decl of
-                        DeclSignature (Labeled { label: Name { name: Ident name } }) -> Just name
-                        _ -> Nothing
-                    )
-
-            let
-              maySigCst = decls
-                # findMap
-                    ( case _ of
-                        DeclSignature all@(Labeled { label: Name { name }, value }) | name == Ident ident -> Just (DeclSignature all)
-                        _ -> Nothing
-                    )
-
-            valCst <- decls
-              # findMap
-                  ( \decl -> case decl of
-                      DeclValue { name: Name { name: Ident name } } | name == ident -> Just decl
-                      _ -> Nothing
-                  )
-              # liftMaybe (Exc.error $ print "no value found" { ident, names })
-
-            pure $ Str.joinWith ""
-              [ maybe "" printTokens maySigCst # Str.trim
-              , printTokens valCst
-              ]
-        )
-
-      pure $ codeBlock "purescript" (Str.joinWith "\n\n" items)
-  }
-
-codecPursValOpts :: JsonCodec PursValOpts
-codecPursValOpts = CAR.object "PursValOpts"
-  { filePath: CA.string
-  , idents: CA.array CA.string
-  }
-
----
-
-print :: forall a. EncodeJson a => String -> a -> String
-print str val = str <> "\n\n" <> printYaml (encodeJson val)
-
-type PursSigOpts =
-  { filePath :: String
-  , ident :: String
-  , dropIdent :: Maybe Boolean
-  , dropType :: Maybe Boolean
-  , moduleAlias :: Maybe String
-  , prefix :: Maybe String
-  }
-
-converterPursSig :: Cache -> Converter
-converterPursSig cache = mkConverter
-  { name: "pursSig"
-  , description: "PureScript signature converter"
-  , decodeJson: CA.decode codecPursSigOpts
-  , convert: \{ opts: { filePath, ident, dropIdent, dropType, moduleAlias, prefix } } -> do
-      cst <- cache.getCst filePath
-
-      let decls = getDecls cst
-
-      let
-        names = decls
-          # Array.mapMaybe
-              ( \decl -> case decl of
-                  DeclSignature (Labeled { label: Name { name: Ident name } }) -> Just name
-                  DeclForeign _ _ (ForeignValue (Labeled { label: Name { name: Ident name } })) -> Just name
-                  _ -> Nothing
-              )
-
-      typeCst <- decls
-        # findMap
-            ( case _ of
-                DeclSignature (Labeled { label: Name { name }, value }) | name == Ident ident -> Just value
-                DeclForeign _ _ (ForeignValue (Labeled { label: Name { name }, value })) | name == Ident ident -> Just value
-                _ -> Nothing
-            )
-        # liftMaybe (Exc.error $ print "no signature found" { ident, names })
-
-      let typeStr = printTokens typeCst
-
-      let dropIdent' = fromMaybe false dropIdent
-      let dropType' = fromMaybe false dropType
-
-      let
-        ret = Str.joinWith ""
-          [ if dropIdent' then ""
-            else case moduleAlias of
-              Just alias -> alias <> "."
-              Nothing -> ""
-          , if dropIdent' then "" else ident
-          , if dropIdent' && dropType' then "" else " :: "
-          , if dropType' then "" else typeStr
-          ]
-
-      pure $ Str.joinWith ""
-        [ case prefix of
-            Just p -> p
-            Nothing -> ""
-        , inTicks ret
-        ]
-  }
-
-codecPursSigOpts :: JsonCodec PursSigOpts
-codecPursSigOpts = CAR.object "PursSigOpts"
-  { filePath: CA.string
-  , ident: CA.string
-  , dropIdent: CAR.optional CA.boolean
-  , dropType: CAR.optional CA.boolean
-  , moduleAlias: CAR.optional CA.string
-  , prefix: CAR.optional CA.string
-  }
-
----
-
-getModuleCst :: String -> Effect (Module Void)
-getModuleCst content = case CST.parseModule content of
+getModuleCst :: String -> Effect (CST.Module Void)
+getModuleCst content = case parseModule content of
   ParseSucceeded cst ->
     pure cst
   ParseSucceededWithErrors cst errors ->
     throwError $ Exc.error "success with errors"
   ParseFailed { error, position } ->
-    throwError $ Exc.error $ printParseError error
-
-inTicks :: String -> String
-inTicks str = "`" <> str <> "`"
-
-getDecls :: Module Void -> Array (Declaration Void)
-getDecls (Module { body: ModuleBody { decls } }) = decls
+    throwError $ Exc.error $ CSTErr.printParseError error
 
 printTokens :: forall a. TokensOf a => a -> String
 printTokens cst = foldMap Print.printSourceToken (TokenList.toArray (tokensOf cst))
+
+mkCache :: Effect Cache
+mkCache = do
+  refCache <- Ref.new (Map.empty :: Map String (Array Source))
+  pure
+    { getCst: \filePath -> do
+        cache <- Ref.read refCache
+        case Map.lookup filePath cache of
+          Just sources -> pure sources
+          Nothing -> do
+            content <- NodeFS.readTextFile UTF8 filePath
+            cst <- getModuleCst content
+            let sources = getSources cst
+            Ref.modify_ (Map.insert content sources) refCache
+            pure sources
+    }
+
+type Opts =
+  { filePath :: Maybe String
+  , inline :: Boolean
+  , split :: Boolean
+  , pick :: Array PickItem
+  }
+
+type PickItem =
+  { filePath :: String
+  , prefix :: String
+  , pick :: Pick
+  }
+
+data Pick
+  = PickImport
+      { moduleName :: Maybe String }
+  | PickData
+      { name :: String }
+  | PickNewtype
+      { name :: String }
+  | PickType
+      { name :: String }
+  | PickSignature
+      { name :: String }
+  | PickForeign
+      { name :: String }
+  | PickValue
+      { name :: String }
+
+  | PickExtraTypeRecord
+      { name :: String }
+
+  -- | PickExtraDataOrNewtype
+  --     { name :: String }
+  | PickExtraSignatureOrForeign
+      { name :: String }
+  | PickExtraValueAndSignature
+      { name :: String }
+  | PickExtraAny
+      { name :: String
+      }
+
+-- PickModuleHeader
+-- PickClass { name :: String, filePath :: Maybe String }
+-- PickInstancechain
+-- PickInstance
+-- PickDerived
+-- PickKindSignature
+-- PickFixity
+-- PickRole
+
+data Source
+  = SrcImport (CST.ImportDecl Void)
+  | SrcDecl (CST.Declaration Void)
+
+getSources :: CST.Module Void -> Array Source
+getSources
+  ( CST.Module
+      { header: CST.ModuleHeader { imports }
+      , body: CST.ModuleBody { decls }
+      }
+  ) = map SrcImport imports <> map SrcDecl decls
+
+matchOnePick :: Pick -> Source -> Array String
+matchOnePick pick decl = case pick of
+  PickImport _ -> []
+  PickData { name } -> [] -- TODO
+  PickNewtype { name } -> [] -- TODO
+  PickType { name } -> [] -- TODO
+  PickSignature { name: name1 } -> case decl of
+    SrcDecl all@(CST.DeclSignature (CST.Labeled { label: CST.Name { name: CST.Ident name2 } }))
+      | name1 == name2 -> [ printTokens all ]
+    _ -> []
+  PickForeign { name } -> [] -- TODO
+  PickValue { name } -> [] -- TODO
+
+  PickExtraTypeRecord { name } -> [] -- TODO
+
+  PickExtraValueAndSignature { name } ->
+    matchManyPicks
+      [ PickValue { name }
+      , PickSignature { name }
+      ]
+      decl
+
+  PickExtraSignatureOrForeign { name } ->
+    matchManyPicks
+      [ PickSignature { name }
+      , PickForeign { name }
+      ]
+      decl
+
+  PickExtraAny { name } ->
+    matchManyPicks
+      [ PickImport { moduleName: Just name }
+      , PickData { name }
+      , PickNewtype { name }
+      , PickType { name }
+      , PickSignature { name }
+      , PickForeign { name }
+      , PickValue { name }
+      ]
+      decl
+
+matchManyPicks :: Array Pick -> Source -> Array String
+matchManyPicks picks decl = foldMap (\p -> matchOnePick p decl) picks
+
+derive instance Generic Pick _
+
+mkConverterPurs :: Effect Converter
+mkConverterPurs  = do
+  cache <- mkCache
+  pure $ converterPurs cache 
+  
+
+converterPurs :: Cache -> Converter
+converterPurs cache = mkConverter
+  { name: "pursIdent"
+  , description: "PureScript identifier converter"
+  , codecJson: codecOpts
+  , convert: convert cache
+  }
+
+getWrapFn :: Opts -> { wrapInner :: String -> String, wrapOuter :: String -> String }
+getWrapFn { split, inline } =
+  let
+    wrapFn = if inline then inTicks else codeBlock "purescript"
+  in
+    { wrapInner: if split then identity else wrapFn
+    , wrapOuter: if split then wrapFn else identity
+    }
+
+convert :: Cache -> { opts :: Opts } -> Effect String
+convert cache { opts: opts@{ filePath, pick, split, inline } } = do
+  let { wrapInner, wrapOuter } = getWrapFn opts
+
+  items :: (Array String) <- join <$> for pick
+    ( \{ pick, filePath, prefix } -> do
+        sources <- cache.getCst filePath
+        let results = sources >>= matchOnePick pick
+
+        pure $ map ((prefix <> _) <<< wrapInner) results
+    )
+
+  pure $ wrapOuter (Str.joinWith "\n\n" items)
+
+--- Codecs
+
+codecOpts :: JsonCodec Opts
+codecOpts = CA.object "Opts" $
+  sequentialCodec
+    ( CAR.record
+        { filePath: CAR.optional CA.string
+        }
+        # fieldDimap @"filePath"
+            (\m -> Just $ fromMaybe ("src/Main.purs") m)
+            identity
+    )
+    ( \{ filePath } ->
+        CAR.record
+          { pick: CAR.optional (oneOrMany $ codecPickItem { filePath })
+          , inline: CAR.optional CA.boolean
+          , split: CAR.optional CA.boolean
+          }
+          # fieldWithDefault @"split" false
+          # fieldWithDefault @"inline" false
+          # fieldWithDefault @"pick" []
+    )
+
+codecPickItem :: { filePath :: Maybe FilePath } -> JsonCodec PickItem
+codecPickItem { filePath } = altDec decFromPick codecFromObj
+  # fieldCompose @"filePath"
+      ( case filePath of
+          Just fp -> CA.codec' (fromMaybe fp >>> Right) Just
+          Nothing -> CA.codec' (note $ TypeMismatch "") Just
+      )
+  # fieldWithDefault @"prefix" ""
+  where
+  decFromPick json = do
+    pick <- CA.decode codecPick json
+    pure
+      { filePath: Nothing
+      , prefix: Nothing
+      , pick
+      }
+
+  codecFromObj =
+    CAR.object ""
+      { filePath: CAR.optional CA.string
+      , pick: codecPick
+      , prefix: CAR.optional CA.string
+      }
+
+codecPick :: JsonCodec Pick
+codecPick = CAS.sum ""
+  { "PickImport": CAR.object "PickImport"
+      { moduleName: CAR.optional CA.string
+      }
+  , "PickData": CAR.object "PickData"
+      { name: CA.string
+      }
+  , "PickNewtype": CAR.object "PickNewtype"
+      { name: CA.string
+      }
+  , "PickType": CAR.object "PickType"
+      { name: CA.string
+      }
+  , "PickSignature": CAR.object "PickSignature"
+      { name: CA.string
+      }
+  , "PickForeign": CAR.object "PickForeign"
+      { name: CA.string
+      }
+  , "PickValue": CAR.object "PickValue"
+      { name: CA.string
+      }
+  , "PickExtraTypeRecord": CAR.object "PickExtraTypeRecord"
+      { name: CA.string
+      }
+  , "PickExtraSignatureOrForeign": CAR.object "PickExtraSignatureOrForeign"
+      { name: CA.string
+      }
+  , "PickExtraValueAndSignature": CAR.object "PickExtraValueAndSignature"
+      { name: CA.string
+      }
+  , "PickExtraAny": CAR.object "PickExtraAny"
+      { name: CA.string
+      }
+  }
+
+--- Utils
+
+altDec :: forall a. (Json -> Either JsonDecodeError a) -> JsonCodec a -> JsonCodec a
+altDec dec c = CA.codec' dec' enc
+  where
+  dec' :: Json -> Either JsonDecodeError a
+  dec' j = dec j <|> CA.decode c j
+
+  enc :: a -> Json
+  enc = CA.encode c
+
+oneOrMany :: forall a. JsonCodec a -> JsonCodec (Array a)
+oneOrMany c = altDec (map Array.singleton <<< CA.decode c) (CA.array c)
+
+sequentialCodec :: forall r1 r2 r. Union r1 r2 r => Union r2 r1 r => Nub r r => JPropCodec (Record r1) -> (Record r1 -> JPropCodec (Record r2)) -> JPropCodec (Record r)
+sequentialCodec c1 mkc2 = CA.codec dec enc
+  where
+  dec :: Object Json -> Either JsonDecodeError (Record r)
+  dec obj = do
+    ret1 :: Record r1 <- CA.decode c1 obj
+    let c2 = mkc2 ret1
+    ret2 :: Record r2 <- CA.decode c2 obj
+    pure (Record.merge ret1 ret2)
+
+  enc :: Record r -> List (String /\ Json)
+  enc r =
+    let
+      ret1 :: List (String /\ Json)
+      ret1 = CA.encode c1 (pickFields r)
+
+      c2 :: JPropCodec (Record r2)
+      c2 = mkc2 (pickFields r)
+
+      ret2 :: List (String /\ Json)
+      ret2 = CA.encode c2 (pickFields r)
+    in
+      ret1 <> ret2
+
+pickFields :: forall r1 r2 t. Union r2 t r1 => Record r1 -> Record r2
+pickFields = unsafeCoerce
+
+---
+
+fieldWithDefaultSparse
+  :: forall @sym m x r r' t a b
+   . IsSymbol sym
+  => Monad m
+  => Cons sym (Maybe x) t r
+  => Cons sym x t r'
+  => x
+  -> (x -> Boolean)
+  -> Codec m a b (Record r) (Record r)
+  -> Codec m a b (Record r') (Record r')
+fieldWithDefaultSparse defDec shouldNotEncode = fieldDimap @sym
+  (\val -> if shouldNotEncode val then Nothing else Just val)
+  (fromMaybe defDec)
+
+fieldWithDefault
+  :: forall @sym m x r r' t a b
+   . IsSymbol sym
+  => Monad m
+  => Cons sym (Maybe x) t r
+  => Cons sym x t r'
+  => x
+  -> Codec m a b (Record r) (Record r)
+  -> Codec m a b (Record r') (Record r')
+fieldWithDefault defDec = fieldDimap @sym Just (fromMaybe defDec)
+
+fieldOptionalChatty
+  :: forall @sym m x r t a b
+   . IsSymbol sym
+  => Monad m
+  => Cons sym (Maybe x) t r
+  => x
+  -> Codec m a b (Record r) (Record r)
+  -> Codec m a b (Record r) (Record r)
+fieldOptionalChatty defEnc = fieldDimap @sym (fromMaybe defEnc >>> Just) identity
+
+fieldDimap
+  :: forall @sym m x y r r' t a b
+   . IsSymbol sym
+  => Monad m
+  => Cons sym x t r
+  => Cons sym y t r'
+  => (y -> x)
+  -> (x -> y)
+  -> Codec m a b (Record r) (Record r)
+  -> Codec m a b (Record r') (Record r')
+fieldDimap f1 f2 codec = fieldCompose @sym (CA.codec' (f2 >>> pure) f1) codec
+
+fieldCompose
+  :: forall @sym m x y r r' t a b
+   . Monad m
+  => IsSymbol sym
+  => Cons sym x t r
+  => Cons sym y t r'
+  => Codec' m x y
+  -> Codec m a b (Record r) (Record r)
+  -> Codec m a b (Record r') (Record r')
+fieldCompose codec1 codec2 = CA.codec dec enc
+  where
+  prx = Proxy :: Proxy sym
+
+  dec :: a -> m (Record r')
+  dec j = do
+    rec :: Record r <- CA.decode codec2 j
+    let val = Record.get prx rec :: x
+    val' :: y <- CA.decode codec1 val
+    let rec' = Record.set prx val' rec :: Record r'
+    pure rec'
+
+  enc :: Record r' -> b
+  enc r =
+    let
+      rec = Record.modify prx (CA.encode codec1) r :: Record r
+    in
+      CA.encode codec2 rec

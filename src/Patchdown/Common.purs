@@ -2,9 +2,9 @@ module Patchdown.Common where
 
 import Prelude
 
+import Data.Argonaut (class EncodeJson, encodeJson)
 import Data.Argonaut.Core (Json)
-import Data.Codec.Argonaut (JsonDecodeError)
-import Data.Either (Either)
+import Data.Codec.Argonaut (JsonCodec)
 import Data.Exists (Exists, mkExists, runExists)
 import Effect (Effect)
 
@@ -13,7 +13,7 @@ newtype MkConverter a = MkConverter (ConverterFields a)
 type ConverterFields a =
   { name :: String
   , description :: String
-  , decodeJson :: Json -> Either JsonDecodeError a
+  , codecJson :: JsonCodec a
   , convert :: { opts :: a } -> Effect String
   }
 
@@ -32,3 +32,6 @@ codeBlock lang str = "\n```" <> lang <> "\n" <> str <> "\n```\n"
 foreign import yamlToJson :: String -> Effect Json
 
 foreign import printYaml :: Json -> String
+
+print :: forall a. EncodeJson a => String -> a -> String
+print str val = str <> "\n\n" <> printYaml (encodeJson val)

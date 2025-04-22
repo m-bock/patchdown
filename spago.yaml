@@ -22,7 +22,7 @@ workspace:
   extraPackages:
     codec-argonaut: 
       git: https://github.com/m-bock/purescript-codec-argonaut.git
-      ref: dc287c83b79f86f8d9a0045dcb740f0cf9d23ccd
+      ref: 78b0171958a4f21ed23946fe7e574ea5018902d9
       dependencies:
         - argonaut-codecs
         - argonaut-core
