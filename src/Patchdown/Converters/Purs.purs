@@ -282,7 +282,7 @@ convert cache { opts: opts@{ pick } } = do
         pure $ map (addPrefix <<< wrapInner) results
     )
 
-  pure $ wrapOuter (Str.joinWith "\n\n" items)
+  pure $ wrapOuter (Str.joinWith "\n" items)
 
 --- Codecs
 
