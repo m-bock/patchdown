@@ -2,13 +2,16 @@ module Patchdown.Common where
 
 import Prelude
 
-import Data.Argonaut (class EncodeJson, encodeJson)
+import Data.Argonaut (class EncodeJson, encodeJson, stringify)
 import Data.Argonaut.Core (Json)
 import Data.Codec.Argonaut (JsonCodec)
 import Data.Exists (Exists, mkExists, runExists)
+import Data.Maybe (Maybe(..))
 import Data.String (Pattern(..))
 import Data.String as Str
 import Effect (Effect)
+import Effect.Class (class MonadEffect)
+import Effect.Class.Console as Console
 
 newtype MkConverter a = MkConverter (ConverterFields a)
 
@@ -30,7 +33,6 @@ runConverter c f = runExists ((\(MkConverter fields) -> fields) >>> f) c
 codeBlock :: String -> String -> String
 codeBlock lang str = "\n```" <> lang <> "\n" <> str <> "\n```\n"
 
-
 foreign import yamlToJson :: String -> Effect Json
 
 foreign import printYaml :: Json -> String
@@ -49,3 +51,21 @@ mdBold str = "**" <> str <> "**"
 
 mdH5 :: String -> String
 mdH5 str = "##### " <> str
+
+logInfo :: forall m a. MonadEffect m => EncodeJson a => String -> String -> a -> m Unit
+logInfo tag msg val = Console.log $ logImpl tag msg (Just $ encodeJson val)
+
+logInfo_ :: forall m. MonadEffect m => String -> String -> m Unit
+logInfo_ tag msg = Console.log $ logImpl tag msg Nothing
+
+logError :: forall m a. MonadEffect m => EncodeJson a => String -> String -> a -> m Unit
+logError tag msg val = Console.log $ logImpl tag msg (Just $ encodeJson val)
+
+logError_ :: forall m. MonadEffect m => String -> String -> m Unit
+logError_ tag msg = Console.log $ logImpl tag msg Nothing
+
+logImpl :: String -> String -> Maybe Json -> String
+logImpl tag msg val =
+  tag <> ": " <> msg <> case val of
+    Just v -> " " <> stringify v
+    Nothing -> ""

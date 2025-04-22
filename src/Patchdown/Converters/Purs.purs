@@ -184,14 +184,13 @@ matchManyPicks picks decl = foldMap (\p -> matchOnePick p decl) picks
 derive instance Generic Pick _
 
 mkConverterPurs :: Effect Converter
-mkConverterPurs  = do
+mkConverterPurs = do
   cache <- mkCache
-  pure $ converterPurs cache 
-  
+  pure $ converterPurs cache
 
 converterPurs :: Cache -> Converter
 converterPurs cache = mkConverter
-  { name: "pursIdent"
+  { name: "purs"
   , description: "PureScript identifier converter"
   , codecJson: codecOpts
   , convert: convert cache

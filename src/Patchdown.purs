@@ -22,13 +22,12 @@ import Data.String.Regex.Flags as RegFlags
 import Data.Tuple.Nested ((/\))
 import Effect (Effect)
 import Effect.Class (class MonadEffect, liftEffect)
-import Effect.Console (log)
 import Effect.Exception (Error, error, message)
 import Node.Encoding (Encoding(..))
 import Node.FS.Sync (readTextFile, writeTextFile)
 import Node.Process (lookupEnv)
 import Partial.Unsafe (unsafeCrashWith)
-import Patchdown.Common (Converter, codeBlock, mdH5, mdQuote, print, printYaml, runConverter, yamlToJson)
+import Patchdown.Common (Converter, codeBlock, logInfo, mdH5, mdQuote, print, printYaml, runConverter, yamlToJson)
 import Patchdown.Converters.Purs (mkConverterPurs)
 import Patchdown.Converters.Raw (converterRaw)
 
@@ -82,6 +81,9 @@ mapErrEff mpErr eff = do
     Left err -> throwError (mpErr err)
     Right val -> pure val
 
+tag :: String
+tag = "Patchdown"
+
 getReplacement
   :: Map String Converter
   -> { converterName :: String, yamlStr :: String, enable :: Boolean }
@@ -93,15 +95,17 @@ getReplacement converterMap { converterName, yamlStr, enable } = do
     # liftMaybe (InvalidConverter { json })
 
   runConverter converter
-    ( \{ codecJson, convert } -> do
+    ( \{ codecJson, convert, name } -> do
         opts <- CA.decode codecJson json # lmap (\err -> InvalidOptions { json, err }) # liftEither
 
         let newYamlStr = printYaml $ CA.encode codecJson opts
 
         newContent <-
-          if enable then
+          if enable then do
+            logInfo tag "run converter" { name }
             convert { opts } # mapErrEff (\err -> ConverterError { newYamlStr, err: message err })
-          else
+          else do
+            logInfo tag "skip converter" { name }
             pure ""
 
         pure
@@ -113,7 +117,7 @@ run { filePath, converters } = do
   let converterMap = converters # map (\c -> runConverter c _.name /\ c) # Map.fromFoldable
   let converterNames = Map.keys converterMap
 
-  log $ print "#run" { filePath, converterNames }
+  logInfo tag "start" { filePath, converterNames }
 
   fileContent <- readTextFile UTF8 filePath
 
@@ -186,8 +190,8 @@ errorBoxImpl sectionName message val = wrapNl $ mdQuote $ Str.joinWith "\n"
   , ""
   , mdH5 message
   , case val of
-       Just v -> codeBlock "yaml" (printYaml v)
-       Nothing -> ""
+      Just v -> codeBlock "yaml" (printYaml v)
+      Nothing -> ""
   , "<br>"
   ]
 
