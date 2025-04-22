@@ -18,7 +18,7 @@ import Data.Codec.Argonaut as CA
 import Data.Codec.Argonaut.Record as CAR
 import Data.Codec.Argonaut.Sum as CAS
 import Data.Either (Either)
-import Data.Foldable (foldMap)
+import Data.Foldable (foldMap, foldl)
 import Data.Generic.Rep (class Generic)
 import Data.Map (Map)
 import Data.Map as Map
@@ -145,6 +145,17 @@ getSources
       }
   ) = map SrcImport imports <> map SrcDecl decls
 
+getNames :: Array Source -> { signatures :: Array String, imports :: Array String }
+getNames sources =
+  foldl
+    ( \accum -> case _ of
+        SrcDecl (CST.DeclSignature (CST.Labeled { label: CST.Name { name: CST.Ident name } })) ->
+          Record.modify (Proxy :: _ "signatures") (_ <> [ name ]) accum
+        _ -> accum
+    )
+    { signatures: [], imports: [] }
+    sources
+
 matchOnePick :: Pick -> Source -> Array String
 matchOnePick pick decl = case pick of
   PickImport _ -> []
@@ -225,7 +236,7 @@ convert cache { opts: opts@{ pick } } = do
         when (results == []) do
           tell
             [ { message: "no values found"
-              , value: Just $ encodeJson { pick }
+              , value: Just $ encodeJson { pick, names: getNames sources }
               }
             ]
 
