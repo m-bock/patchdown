@@ -6,6 +6,8 @@ import Data.Argonaut (class EncodeJson, encodeJson)
 import Data.Argonaut.Core (Json)
 import Data.Codec.Argonaut (JsonCodec)
 import Data.Exists (Exists, mkExists, runExists)
+import Data.String (Pattern(..))
+import Data.String as Str
 import Effect (Effect)
 
 newtype MkConverter a = MkConverter (ConverterFields a)
@@ -35,3 +37,15 @@ foreign import printYaml :: Json -> String
 
 print :: forall a. EncodeJson a => String -> a -> String
 print str val = str <> "\n\n" <> printYaml (encodeJson val)
+
+mdQuote :: String -> String
+mdQuote str = str
+  # Str.split (Pattern "\n")
+  # map (\line -> "> " <> line)
+  # Str.joinWith "\n"
+
+mdBold :: String -> String
+mdBold str = "**" <> str <> "**"
+
+mdH5 :: String -> String
+mdH5 str = "##### " <> str

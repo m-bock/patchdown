@@ -7,6 +7,7 @@ import Prelude
 
 import Control.Monad.Error.Class (class MonadError, liftEither, liftMaybe, throwError, try)
 import Control.Monad.Except (ExceptT, runExceptT)
+import Data.Argonaut (class EncodeJson, encodeJson)
 import Data.Argonaut.Core (Json)
 import Data.Bifunctor (lmap)
 import Data.Codec.Argonaut (JsonDecodeError, printJsonDecodeError)
@@ -15,6 +16,7 @@ import Data.Either (Either(..))
 import Data.Map (Map)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe')
+import Data.String as Str
 import Data.String.Regex (Regex, regex)
 import Data.String.Regex.Flags as RegFlags
 import Data.Tuple.Nested ((/\))
@@ -26,7 +28,7 @@ import Node.Encoding (Encoding(..))
 import Node.FS.Sync (readTextFile, writeTextFile)
 import Node.Process (lookupEnv)
 import Partial.Unsafe (unsafeCrashWith)
-import Patchdown.Common (Converter, codeBlock, print, printYaml, runConverter, yamlToJson)
+import Patchdown.Common (Converter, codeBlock, mdH5, mdQuote, print, printYaml, runConverter, yamlToJson)
 import Patchdown.Converters.Purs (mkConverterPurs)
 import Patchdown.Converters.Raw (converterRaw)
 
@@ -118,26 +120,26 @@ run { filePath, converters } = do
   patchedFileContent <-
     replacePdSection fileContent \opts@{ converterName, yamlStr } -> do
       ret <- runExceptT $ getReplacement converterMap opts
-      
+
       pure case ret of
         Left (InvalidYaml { err }) ->
           { newYamlStr: yamlStr
-          , newContent: mkErrorContent converterName err
+          , newContent: errorBox_ converterName err
           }
         Left (InvalidOptions { json, err }) ->
           { newYamlStr: printYaml json
-          , newContent: mkErrorContent converterName (printJsonDecodeError err)
+          , newContent: errorBox_ converterName (printJsonDecodeError err)
           }
         Left (InvalidConverter { json }) ->
           { newYamlStr: printYaml json
-          , newContent: mkErrorContent converterName $ print "Converter not found"
+          , newContent: errorBox converterName "Converter not found"
               { converterName
               , converterNames
               }
           }
         Left (ConverterError { newYamlStr, err }) ->
           { newYamlStr
-          , newContent: mkErrorContent converterName err
+          , newContent: errorBox_ converterName err
           }
         Right val -> val
 
@@ -171,6 +173,20 @@ foreign import replaceEffectImpl
 replaceEffect :: Regex -> (String -> Array (Maybe String) -> Effect String) -> String -> Effect String
 replaceEffect = replaceEffectImpl Just Nothing
 
-mkErrorContent :: String -> String -> String
-mkErrorContent converterName err =
-  codeBlock "text" ("🛑 ERROR at `" <> converterName <> "`\n" <> err)
+errorBox :: forall a. EncodeJson a => String -> String -> a -> String
+errorBox sectionName message val = errorBoxImpl sectionName message (Just $ encodeJson val)
+
+errorBox_ :: String -> String -> String
+errorBox_ sectionName message = errorBoxImpl sectionName message Nothing
+
+errorBoxImpl :: String -> String -> Maybe Json -> String
+errorBoxImpl sectionName message val = mdQuote $ Str.joinWith "\n"
+  [ "<br>"
+  , "🛑 Error at section `" <> sectionName <> "`"
+  , ""
+  , mdH5 message
+  , case val of
+       Just v -> codeBlock "yaml" (printYaml v)
+       Nothing -> ""
+  , "<br>"
+  ]
