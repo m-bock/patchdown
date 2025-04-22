@@ -267,41 +267,48 @@ codecPickItem { filePath } = altDec decFromPick codecFromObj
       }
 
 codecPick :: JsonCodec Pick
-codecPick = CAS.sum ""
-  { "PickImport": CAR.object "PickImport"
-      { moduleName: CAR.optional CA.string
+codecPick =
+  altDec
+    ( \j -> do
+        name <- CA.decode CA.string j
+        pure (PickExtraAny { name })
+
+    ) $
+    CAS.sum ""
+      { "PickImport": CAR.object "PickImport"
+          { moduleName: CAR.optional CA.string
+          }
+      , "PickData": CAR.object "PickData"
+          { name: CA.string
+          }
+      , "PickNewtype": CAR.object "PickNewtype"
+          { name: CA.string
+          }
+      , "PickType": CAR.object "PickType"
+          { name: CA.string
+          }
+      , "PickSignature": CAR.object "PickSignature"
+          { name: CA.string
+          }
+      , "PickForeign": CAR.object "PickForeign"
+          { name: CA.string
+          }
+      , "PickValue": CAR.object "PickValue"
+          { name: CA.string
+          }
+      , "PickExtraTypeRecord": CAR.object "PickExtraTypeRecord"
+          { name: CA.string
+          }
+      , "PickExtraSignatureOrForeign": CAR.object "PickExtraSignatureOrForeign"
+          { name: CA.string
+          }
+      , "PickExtraValueAndSignature": CAR.object "PickExtraValueAndSignature"
+          { name: CA.string
+          }
+      , "PickExtraAny": CAR.object "PickExtraAny"
+          { name: CA.string
+          }
       }
-  , "PickData": CAR.object "PickData"
-      { name: CA.string
-      }
-  , "PickNewtype": CAR.object "PickNewtype"
-      { name: CA.string
-      }
-  , "PickType": CAR.object "PickType"
-      { name: CA.string
-      }
-  , "PickSignature": CAR.object "PickSignature"
-      { name: CA.string
-      }
-  , "PickForeign": CAR.object "PickForeign"
-      { name: CA.string
-      }
-  , "PickValue": CAR.object "PickValue"
-      { name: CA.string
-      }
-  , "PickExtraTypeRecord": CAR.object "PickExtraTypeRecord"
-      { name: CA.string
-      }
-  , "PickExtraSignatureOrForeign": CAR.object "PickExtraSignatureOrForeign"
-      { name: CA.string
-      }
-  , "PickExtraValueAndSignature": CAR.object "PickExtraValueAndSignature"
-      { name: CA.string
-      }
-  , "PickExtraAny": CAR.object "PickExtraAny"
-      { name: CA.string
-      }
-  }
 
 --- Utils
 
