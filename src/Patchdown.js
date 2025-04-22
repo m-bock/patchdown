@@ -1,5 +1,5 @@
 export const replaceEffectImpl = (just, nothing, r, f, s) => {
-  s.replace(r, (match) => {
+  return s.replace(r, function (match) {
     const groups = [];
     let group,
       i = 1;
