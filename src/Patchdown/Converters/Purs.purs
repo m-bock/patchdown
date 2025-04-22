@@ -243,7 +243,7 @@ codecOpts = CA.object "Opts" $
     )
 
 codecPickItem :: { filePath :: Maybe FilePath } -> JsonCodec PickItem
-codecPickItem { filePath } = altDec decFromPick codecFromObj
+codecPickItem { filePath } = CA.codec' dec enc
   # fieldCompose @"filePath"
       ( case filePath of
           Just fp -> CA.codec' (fromMaybe fp >>> Right) Just
@@ -251,15 +251,22 @@ codecPickItem { filePath } = altDec decFromPick codecFromObj
       )
   # fieldWithDefault @"prefix" ""
   where
-  decFromPick json = do
-    pick <- CA.decode codecPick json
-    pure
-      { filePath: Nothing
-      , prefix: Nothing
-      , pick
-      }
+  dec j =
+    ( do
+        pick <- CA.decode codecPick j
+        pure
+          { filePath: Nothing
+          , prefix: Nothing
+          , pick
+          }
+    ) <|> CA.decode codecCanonical j
 
-  codecFromObj =
+  enc val =
+    case val of
+      { filePath: Nothing, prefix: Nothing } -> CA.encode codecPick val.pick
+      _ -> CA.encode codecCanonical val
+
+  codecCanonical =
     CAR.object ""
       { filePath: CAR.optional CA.string
       , pick: codecPick
