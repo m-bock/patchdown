@@ -22,10 +22,10 @@ converterRaw = mkConverter
   , convert: \{ opts } -> convert opts
   }
 
-convert :: Opts -> Effect String
+convert :: Opts -> Effect { content :: String, errors :: Array String }
 convert { filePath } = do
   content <- readTextFile UTF8 filePath
-  pure content
+  pure { content, errors: [] }
 
 codecOpts :: JsonCodec Opts
 codecOpts = CAR.object "Opts"

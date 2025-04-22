@@ -100,16 +100,16 @@ getReplacement converterMap { converterName, yamlStr, enable } = do
 
         let newYamlStr = printYaml $ CA.encode codecJson opts
 
-        newContent <-
+        { content, errors } <-
           if enable then do
             logInfo tag "run converter" { name }
             convert { opts } # mapErrEff (\err -> ConverterError { newYamlStr, err: message err })
           else do
             logInfo tag "skip converter" { name }
-            pure ""
+            pure { content: "", errors: [] }
 
         pure
-          { newContent, newYamlStr }
+          { newContent: content, newYamlStr }
     )
 
 run :: Opts -> Effect Unit

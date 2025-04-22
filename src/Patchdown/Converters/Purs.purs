@@ -1,20 +1,22 @@
-module Patchdown.Converters.Purs where
+module Patchdown.Converters.Purs
+  ( mkConverterPurs
+  ) where
 
 import Prelude
 
 import Control.Alt ((<|>))
 import Control.Monad.Error.Class (throwError)
+import Control.Monad.Writer (WriterT, runWriterT)
 import Data.Argonaut.Core (Json)
 import Data.Array as Array
 import Data.Codec (Codec, Codec')
-import Data.Codec.Argonaut (JPropCodec, JsonCodec, JsonDecodeError)
+import Data.Codec.Argonaut (JsonCodec, JsonDecodeError)
 import Data.Codec.Argonaut as CA
 import Data.Codec.Argonaut.Record as CAR
 import Data.Codec.Argonaut.Sum as CAS
 import Data.Either (Either)
 import Data.Foldable (foldMap)
 import Data.Generic.Rep (class Generic)
-import Data.List (List)
 import Data.Map (Map)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe)
@@ -23,15 +25,15 @@ import Data.String as Str
 import Data.String.Extra (snakeCase)
 import Data.Symbol (class IsSymbol)
 import Data.Traversable (for)
-import Data.Tuple.Nested (type (/\))
+import Data.Tuple.Nested ((/\))
 import Effect (Effect)
+import Effect.Class (liftEffect)
 import Effect.Exception as Exc
 import Effect.Ref as Ref
-import Foreign.Object (Object)
 import Node.Encoding (Encoding(..))
 import Node.FS.Sync as NodeFS
-import Patchdown.Common (Converter, codeBlock, mkConverter)
-import Prim.Row (class Cons, class Nub, class Union)
+import Patchdown.Common (Converter, codeBlock, mdTicks, mkConverter)
+import Prim.Row (class Cons, class Union)
 import PureScript.CST (RecoveredParserResult(..), parseModule)
 import PureScript.CST.Errors as CSTErr
 import PureScript.CST.Print as Print
@@ -42,10 +44,9 @@ import Record as Record
 import Type.Prelude (Proxy(..))
 import Unsafe.Coerce (unsafeCoerce)
 
-type Cache = { getCst :: String -> Effect (Array Source) }
+--- Cache
 
-inTicks :: String -> String
-inTicks str = "`" <> str <> "`"
+type Cache = { getCst :: String -> Effect (Array Source) }
 
 getModuleCst :: String -> Effect (CST.Module Void)
 getModuleCst content = case parseModule content of
@@ -55,11 +56,6 @@ getModuleCst content = case parseModule content of
     throwError $ Exc.error "success with errors"
   ParseFailed { error, position } ->
     throwError $ Exc.error $ CSTErr.printParseError error
-
-printTokens :: forall a. TokensOf a => a -> String
-printTokens cst =
-  foldMap Print.printSourceToken (TokenList.toArray (tokensOf cst))
-    # Str.trim
 
 mkCache :: Effect Cache
 mkCache = do
@@ -76,6 +72,8 @@ mkCache = do
             Ref.modify_ (Map.insert content sources) refCache
             pure sources
     }
+
+--- Core
 
 type Opts =
   { filePath :: Maybe String
@@ -120,6 +118,7 @@ data Pick
       }
 
 derive instance Eq Pick
+derive instance Generic Pick _
 
 -- PickModuleHeader
 -- PickClass { name :: String, filePath :: Maybe String }
@@ -186,8 +185,6 @@ matchOnePick pick decl = case pick of
 matchManyPicks :: Array Pick -> Source -> Array String
 matchManyPicks picks decl = foldMap (\p -> matchOnePick p decl) picks
 
-derive instance Generic Pick _
-
 mkConverterPurs :: Effect Converter
 mkConverterPurs = do
   cache <- mkCache
@@ -198,26 +195,30 @@ converterPurs cache = mkConverter
   { name: "purs"
   , description: "PureScript identifier converter"
   , codecJson: codecOpts
-  , convert: convert cache
+  , convert: \opts -> do
+      (content /\ errors) <- runWriterT $ convert cache opts
+      pure { content, errors }
   }
 
 getWrapFn :: Opts -> { wrapInner :: String -> String, wrapOuter :: String -> String }
 getWrapFn { split, inline } =
   let
-    wrapFn = if inline then inTicks else codeBlock "purescript"
+    wrapFn = if inline then mdTicks else codeBlock "purescript"
   in
-    { wrapInner: if split then identity else wrapFn
-    , wrapOuter: if split then wrapFn else identity
+    { wrapInner: if split then wrapFn else identity
+    , wrapOuter: if split then identity else wrapFn
     }
 
-convert :: Cache -> { opts :: Opts } -> Effect String
-convert cache { opts: opts@{ pick } } = do
+convert :: Cache -> { opts :: Opts } -> WriterT (Array String) Effect String
+convert cache { opts: opts@{ pick } } = liftEffect do
   let { wrapInner, wrapOuter } = getWrapFn opts
 
   items :: (Array String) <- join <$> for pick
     ( \{ pick, filePath, prefix } -> do
         sources <- cache.getCst (fromMaybe "src/Main.purs" (filePath <|> opts.filePath))
         let results = sources >>= matchOnePick pick
+
+        -- throwError if no results per pick
 
         let
           addPrefix val = case prefix of
@@ -340,30 +341,6 @@ altDec dec c = CA.codec' dec' enc
 oneOrMany :: forall a. JsonCodec a -> JsonCodec (Array a)
 oneOrMany c = altDec (map Array.singleton <<< CA.decode c) (CA.array c)
 
-sequentialCodec :: forall r1 r2 r. Union r1 r2 r => Union r2 r1 r => Nub r r => JPropCodec (Record r1) -> (Record r1 -> JPropCodec (Record r2)) -> JPropCodec (Record r)
-sequentialCodec c1 mkc2 = CA.codec dec enc
-  where
-  dec :: Object Json -> Either JsonDecodeError (Record r)
-  dec obj = do
-    ret1 :: Record r1 <- CA.decode c1 obj
-    let c2 = mkc2 ret1
-    ret2 :: Record r2 <- CA.decode c2 obj
-    pure (Record.merge ret1 ret2)
-
-  enc :: Record r -> List (String /\ Json)
-  enc r =
-    let
-      ret1 :: List (String /\ Json)
-      ret1 = CA.encode c1 (pickFields r)
-
-      c2 :: JPropCodec (Record r2)
-      c2 = mkc2 (pickFields r)
-
-      ret2 :: List (String /\ Json)
-      ret2 = CA.encode c2 (pickFields r)
-    in
-      ret1 <> ret2
-
 pickFields :: forall r1 r2 t. Union r2 t r1 => Record r1 -> Record r2
 pickFields = unsafeCoerce
 
@@ -443,3 +420,10 @@ fieldCompose codec1 codec2 = CA.codec dec enc
       rec = Record.modify prx (CA.encode codec1) r :: Record r
     in
       CA.encode codec2 rec
+
+--- Utils
+
+printTokens :: forall a. TokensOf a => a -> String
+printTokens cst =
+  foldMap Print.printSourceToken (TokenList.toArray (tokensOf cst))
+    # Str.trim

@@ -9,6 +9,7 @@ import Data.Exists (Exists, mkExists, runExists)
 import Data.Maybe (Maybe(..))
 import Data.String (Pattern(..))
 import Data.String as Str
+import Data.Tuple.Nested (type (/\), (/\))
 import Effect (Effect)
 import Effect.Class (class MonadEffect)
 import Effect.Class.Console as Console
@@ -19,7 +20,7 @@ type ConverterFields a =
   { name :: String
   , description :: String
   , codecJson :: JsonCodec a
-  , convert :: { opts :: a } -> Effect String
+  , convert :: { opts :: a } -> Effect { content :: String, errors :: Array String }
   }
 
 type Converter = Exists MkConverter
@@ -51,6 +52,9 @@ mdBold str = "**" <> str <> "**"
 
 mdH5 :: String -> String
 mdH5 str = "##### " <> str
+
+mdTicks :: String -> String
+mdTicks str = "`" <> str <> "`"
 
 logInfo :: forall m a. MonadEffect m => EncodeJson a => String -> String -> a -> m Unit
 logInfo tag msg val = Console.log $ logImpl tag msg (Just $ encodeJson val)
