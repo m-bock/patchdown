@@ -57,7 +57,9 @@ getModuleCst content = case parseModule content of
     throwError $ Exc.error $ CSTErr.printParseError error
 
 printTokens :: forall a. TokensOf a => a -> String
-printTokens cst = foldMap Print.printSourceToken (TokenList.toArray (tokensOf cst))
+printTokens cst =
+  foldMap Print.printSourceToken (TokenList.toArray (tokensOf cst))
+    # Str.trim
 
 mkCache :: Effect Cache
 mkCache = do
