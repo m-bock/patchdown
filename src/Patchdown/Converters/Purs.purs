@@ -145,27 +145,42 @@ getSources
       }
   ) = map SrcImport imports <> map SrcDecl decls
 
-getNames :: Array Source -> { signatures :: Array String, imports :: Array String }
+getNames :: Array Source -> { signatures :: Array String, imports :: Array String, types :: Array String }
 getNames sources =
   foldl
     ( \accum -> case _ of
+        SrcDecl (CST.DeclType { name: CST.Name { name: CST.Proper name } } _ _) ->
+          Record.modify (Proxy :: _ "types") (_ <> [ name ]) accum
+
         SrcDecl (CST.DeclSignature (CST.Labeled { label: CST.Name { name: CST.Ident name } })) ->
           Record.modify (Proxy :: _ "signatures") (_ <> [ name ]) accum
         _ -> accum
     )
-    { signatures: [], imports: [] }
+    { signatures: [], imports: [], types: [] }
     sources
+
+declToName :: CST.Declaration Void -> Maybe String
+declToName = case _ of
+  (CST.DeclType { name: CST.Name { name: CST.Proper name } } _ _) -> Just name
+  (CST.DeclSignature (CST.Labeled { label: CST.Name { name: CST.Ident name } })) -> Just name
+  _ -> Nothing
 
 matchOnePick :: Pick -> Source -> Array String
 matchOnePick pick decl = case pick of
   PickImport _ -> []
   PickData { name } -> [] -- TODO
   PickNewtype { name } -> [] -- TODO
-  PickType { name } -> [] -- TODO
-  PickSignature { name: name1 } -> case decl of
-    SrcDecl all@(CST.DeclSignature (CST.Labeled { label: CST.Name { name: CST.Ident name2 } }))
-      | name1 == name2 -> [ printTokens all ]
+
+  PickType { name } -> case decl of
+    SrcDecl all@(CST.DeclType { name: CST.Name { name: CST.Proper name' } } _ _)
+      | name == name' -> [ printTokens all ]
     _ -> []
+
+  PickSignature { name } -> case decl of
+    SrcDecl all@(CST.DeclSignature (CST.Labeled { label: CST.Name { name: CST.Ident name' } }))
+      | name == name' -> [ printTokens all ]
+    _ -> []
+
   PickForeign { name } -> [] -- TODO
   PickValue { name } -> [] -- TODO
 
