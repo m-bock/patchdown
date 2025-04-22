@@ -8,7 +8,7 @@ import Data.Codec.Argonaut.Record as CAR
 import Effect (Effect)
 import Node.Encoding (Encoding(..))
 import Node.FS.Sync (readTextFile)
-import Patchdown.Common (Converter, mkConverter)
+import Patchdown.Common (Converter, ConvertResult, mkConverter)
 
 type Opts =
   { filePath :: String
@@ -22,7 +22,7 @@ converterRaw = mkConverter
   , convert: \{ opts } -> convert opts
   }
 
-convert :: Opts -> Effect { content :: String, errors :: Array String }
+convert :: Opts -> Effect ConvertResult
 convert { filePath } = do
   content <- readTextFile UTF8 filePath
   pure { content, errors: [] }

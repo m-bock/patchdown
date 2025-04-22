@@ -20,7 +20,17 @@ type ConverterFields a =
   { name :: String
   , description :: String
   , codecJson :: JsonCodec a
-  , convert :: { opts :: a } -> Effect { content :: String, errors :: Array String }
+  , convert :: { opts :: a } -> Effect ConvertResult
+  }
+
+type ConvertResult =
+  { content :: String
+  , errors :: Array ConvertError
+  }
+
+type ConvertError =
+  { message :: String
+  , value :: Maybe Json
   }
 
 type Converter = Exists MkConverter

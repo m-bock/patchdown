@@ -7,7 +7,10 @@ import Prelude
 import Control.Alt ((<|>))
 import Control.Monad.Error.Class (throwError)
 import Control.Monad.Writer (WriterT, runWriterT)
+import Control.Monad.Writer.Class (tell)
 import Data.Argonaut.Core (Json)
+import Data.Argonaut.Decode.Class (class DecodeJson)
+import Data.Argonaut.Encode.Class (class EncodeJson, encodeJson)
 import Data.Array as Array
 import Data.Codec (Codec, Codec')
 import Data.Codec.Argonaut (JsonCodec, JsonDecodeError)
@@ -28,11 +31,12 @@ import Data.Traversable (for)
 import Data.Tuple.Nested ((/\))
 import Effect (Effect)
 import Effect.Class (liftEffect)
+import Effect.Exception (message)
 import Effect.Exception as Exc
 import Effect.Ref as Ref
 import Node.Encoding (Encoding(..))
 import Node.FS.Sync as NodeFS
-import Patchdown.Common (Converter, codeBlock, mdTicks, mkConverter)
+import Patchdown.Common (Converter, ConvertError, codeBlock, mdTicks, mkConverter)
 import Prim.Row (class Cons, class Union)
 import PureScript.CST (RecoveredParserResult(..), parseModule)
 import PureScript.CST.Errors as CSTErr
@@ -209,16 +213,21 @@ getWrapFn { split, inline } =
     , wrapOuter: if split then identity else wrapFn
     }
 
-convert :: Cache -> { opts :: Opts } -> WriterT (Array String) Effect String
-convert cache { opts: opts@{ pick } } = liftEffect do
+convert :: Cache -> { opts :: Opts } -> WriterT (Array ConvertError) Effect String
+convert cache { opts: opts@{ pick } } = do
   let { wrapInner, wrapOuter } = getWrapFn opts
 
   items :: (Array String) <- join <$> for pick
     ( \{ pick, filePath, prefix } -> do
-        sources <- cache.getCst (fromMaybe "src/Main.purs" (filePath <|> opts.filePath))
+        sources <- liftEffect $ cache.getCst (fromMaybe "src/Main.purs" (filePath <|> opts.filePath))
         let results = sources >>= matchOnePick pick
 
-        -- throwError if no results per pick
+        when (results == []) do
+          tell
+            [ { message: "no values found"
+              , value: Just $ encodeJson { pick }
+              }
+            ]
 
         let
           addPrefix val = case prefix of
@@ -272,6 +281,9 @@ codecPickItem = CA.codec' dec enc
       , pick: codecPick
       , prefix: CAR.optional CA.string
       }
+
+instance EncodeJson Pick where
+  encodeJson = CA.encode codecPick
 
 codecPick :: JsonCodec Pick
 codecPick = CA.codec' dec enc

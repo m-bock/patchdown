@@ -9,10 +9,12 @@ import Control.Monad.Error.Class (class MonadError, liftEither, liftMaybe, throw
 import Control.Monad.Except (ExceptT, runExceptT)
 import Data.Argonaut (class EncodeJson, encodeJson)
 import Data.Argonaut.Core (Json)
+import Data.Array (foldMap)
 import Data.Bifunctor (lmap)
 import Data.Codec.Argonaut (JsonDecodeError, printJsonDecodeError)
 import Data.Codec.Argonaut as CA
 import Data.Either (Either(..))
+import Data.Foldable (fold)
 import Data.Map (Map)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe')
@@ -27,7 +29,7 @@ import Node.Encoding (Encoding(..))
 import Node.FS.Sync (readTextFile, writeTextFile)
 import Node.Process (lookupEnv)
 import Partial.Unsafe (unsafeCrashWith)
-import Patchdown.Common (Converter, codeBlock, logInfo, mdH5, mdQuote, print, printYaml, runConverter, yamlToJson)
+import Patchdown.Common (Converter, ConvertError, codeBlock, logInfo, mdH5, mdQuote, print, printYaml, runConverter, yamlToJson)
 import Patchdown.Converters.Purs (mkConverterPurs)
 import Patchdown.Converters.Raw (converterRaw)
 
@@ -45,7 +47,7 @@ endTag = "<!-- PD_END -->"
 replacePdSection
   :: String
   -> ( { converterName :: String, yamlStr :: String, enable :: Boolean }
-       -> Effect { newYamlStr :: String, newContent :: String }
+       -> Effect { newYamlStr :: String, newContent :: String, errors :: Array ConvertError }
      )
   -> Effect String
 replacePdSection content replaceFn = do
@@ -62,9 +64,14 @@ replacePdSection content replaceFn = do
             [ Just converterName, Just exclam, Just yamlStr ] -> pure { converterName, enable: exclam /= "!", yamlStr }
             _ -> throwError (error $ print "invalid matches" { matches })
 
-        { newContent, newYamlStr } <- replaceFn { converterName, yamlStr, enable }
+        { newContent, newYamlStr, errors } <- replaceFn { converterName, yamlStr, enable }
 
-        pure (mkStartTag (converterName <> (if enable then "" else "!") <> "\n" <> newYamlStr) <> newContent <> endTag)
+        pure $ fold
+          [ mkStartTag (converterName <> (if enable then "" else "!") <> "\n" <> newYamlStr)
+          , foldMap (\err -> errorBox_ converterName (err.message)) errors
+          , newContent
+          , endTag
+          ]
     )
     content
 
@@ -87,7 +94,7 @@ tag = "Patchdown"
 getReplacement
   :: Map String Converter
   -> { converterName :: String, yamlStr :: String, enable :: Boolean }
-  -> ExceptT Err Effect { newYamlStr :: String, newContent :: String }
+  -> ExceptT Err Effect { newYamlStr :: String, newContent :: String, errors :: Array ConvertError }
 getReplacement converterMap { converterName, yamlStr, enable } = do
   json <- yamlToJson yamlStr # mapErrEff \err -> InvalidYaml { err: message err }
 
@@ -109,7 +116,7 @@ getReplacement converterMap { converterName, yamlStr, enable } = do
             pure { content: "", errors: [] }
 
         pure
-          { newContent: content, newYamlStr }
+          { newContent: content, newYamlStr, errors }
     )
 
 run :: Opts -> Effect Unit
@@ -128,22 +135,34 @@ run { filePath, converters } = do
       pure case ret of
         Left (InvalidYaml { err }) ->
           { newYamlStr: yamlStr
-          , newContent: errorBox_ converterName err
+          , newContent: ""
+          , errors: [ { message: err, value: Nothing } ]
           }
         Left (InvalidOptions { json, err }) ->
           { newYamlStr: printYaml json
-          , newContent: errorBox_ converterName (printJsonDecodeError err)
+          , newContent: ""
+          , errors: [ { message: printJsonDecodeError err, value: Just json } ]
           }
         Left (InvalidConverter { json }) ->
           { newYamlStr: printYaml json
-          , newContent: errorBox converterName "Converter not found"
-              { converterName
-              , converterNames
-              }
+          , newContent: ""
+          , errors:
+              [ { message: "Converter not found"
+                , value: Just $ encodeJson
+                    { converterName
+                    , converterNames
+                    }
+                }
+              ]
           }
         Left (ConverterError { newYamlStr, err }) ->
           { newYamlStr
-          , newContent: errorBox_ converterName err
+          , newContent: ""
+          , errors:
+              [ { message: err
+                , value: Nothing
+                }
+              ]
           }
         Right val -> val
 
