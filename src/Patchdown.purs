@@ -68,7 +68,7 @@ replacePdSection content replaceFn = do
 
         pure $ fold
           [ mkStartTag (converterName <> (if enable then "" else "!") <> "\n" <> newYamlStr)
-          , foldMap (\err -> errorBox_ converterName (err.message)) errors
+          , foldMap (\err -> errorBoxImpl converterName (err.message) err.value) errors
           , newContent
           , endTag
           ]
