@@ -176,31 +176,33 @@ getNameProper (CST.Name { name: CST.Proper name }) = name
 getNameIdent :: CST.Name CST.Ident -> String
 getNameIdent (CST.Name { name: CST.Ident name }) = name
 
-matchOnePick :: Pick -> Source -> Array String
+data T a = Singe a | Group (Array a)
+
+matchOnePick :: Pick -> Source -> Array (Array String)
 matchOnePick pick decl = case pick of
   PickImport _ -> []
   PickData { name } -> case decl of
     SrcDecl all@(CST.DeclData r _)
-      | name == getNameProper r.name -> [ printTokens all ]
+      | name == getNameProper r.name -> [ [ printTokens all ] ]
     _ -> []
 
   PickNewtype { name } -> [] -- TODO
 
   PickType { name } -> case decl of
     SrcDecl all@(CST.DeclType r _ _)
-      | name == getNameProper r.name -> [ printTokens all ]
+      | name == getNameProper r.name -> [ [ printTokens all ] ]
     _ -> []
 
   PickSignature { name } -> case decl of
     SrcDecl all@(CST.DeclSignature (CST.Labeled r))
-      | name == getNameIdent r.label -> [ printTokens all ]
+      | name == getNameIdent r.label -> [ [ printTokens all ] ]
     _ -> []
 
   PickForeign { name } -> [] -- TODO
 
   PickValue { name } -> case decl of
     SrcDecl all@(CST.DeclValue r)
-      | name == getNameIdent r.name -> [ printTokens all ]
+      | name == getNameIdent r.name -> [ [ printTokens all ] ]
     _ -> []
 
   PickExtraTypeRecord { name } -> [] -- TODO
@@ -213,7 +215,7 @@ matchOnePick pick decl = case pick of
       decl
 
   PickExtraSignatureOrForeign { name } ->
-    matchManyPicks
+    group $ matchManyPicks
       [ PickSignature { name }
       , PickForeign { name }
       ]
@@ -231,7 +233,10 @@ matchOnePick pick decl = case pick of
       ]
       decl
 
-matchManyPicks :: Array Pick -> Source -> Array String
+group :: Array (Array String) -> Array (Array String)
+group = join >>> map pure
+
+matchManyPicks :: Array Pick -> Source -> Array (Array String)
 matchManyPicks picks decl = foldMap (\p -> matchOnePick p decl) picks
 
 mkConverterPurs :: Effect Converter
@@ -279,7 +284,7 @@ convert cache { opts: opts@{ pick } } = do
             Just p -> (p <> val)
             Nothing -> val
 
-        pure $ map (addPrefix <<< wrapInner) results
+        pure $ map (addPrefix <<< wrapInner) $ map (Str.joinWith "\n") results
     )
 
   pure $ wrapOuter (Str.joinWith "\n\n" items)
