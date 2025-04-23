@@ -45,6 +45,7 @@ import PureScript.CST (RecoveredParserResult(..), parseModule)
 import PureScript.CST.Errors as CSTErr
 import PureScript.CST.Print as Print
 import PureScript.CST.Range (class TokensOf, tokensOf)
+import PureScript.CST.Range.TokenList (TokenList)
 import PureScript.CST.Range.TokenList as TokenList
 import PureScript.CST.Types (Declaration)
 import PureScript.CST.Types as CST
@@ -235,8 +236,11 @@ matchOnePick pick decl = case pick of
   PickForeignValue { name, stripImport } -> case decl of
     SrcDecl (CST.DeclForeign v1 v2 v3@(CST.ForeignValue (CST.Labeled r)))
       | name == getNameIdent r.label ->
-          [ if stripImport then "" else Print.printSourceToken v1 <> Print.printSourceToken v2
-          , printTokens v3 <> "\n"
+          [ ( if stripImport then ""
+              else printTokenList $ TokenList.fromArray [ v1, v2 ]
+            )
+              <> printTokens v3
+              <> "\n"
           ]
     _ -> []
 
@@ -532,10 +536,13 @@ fieldCompose codec1 codec2 = CA.codec dec enc
 --- Utils
 
 printTokens :: forall a. TokensOf a => a -> String
-printTokens cst =
+printTokens cst = printTokenList (tokensOf cst)
+
+printTokenList :: TokenList -> String
+printTokenList tokenList =
   let
     sourceTokens =
-      TokenList.toArray (tokensOf cst)
+      TokenList.toArray tokenList
         # Array.modifyAtIndices [ 0 ] (\r -> r { leadingComments = [] })
   in
     foldMap Print.printSourceToken sourceTokens
