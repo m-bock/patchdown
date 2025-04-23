@@ -301,7 +301,7 @@ getWrapFn { split, inline } =
     wrapFn = if inline then mdTicks else mdCodeBlock "purescript"
   in
     { wrapInner: if split then wrapFn else identity
-    , wrapOuter: if split then wrapNl else wrapFn
+    , wrapOuter: wrapNl <<< if split then identity else wrapFn
     }
 
 wrapNl :: String -> String
