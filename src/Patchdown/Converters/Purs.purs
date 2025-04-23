@@ -301,8 +301,12 @@ getWrapFn { split, inline } =
     wrapFn = if inline then mdTicks else mdCodeBlock "purescript"
   in
     { wrapInner: if split then wrapFn else identity
-    , wrapOuter: if split then identity else wrapFn
+    , wrapOuter: if split then wrapNl else wrapFn
     }
+
+wrapNl :: String -> String
+wrapNl str =
+  "\n" <> str <> "\n"
 
 convert :: Cache -> { opts :: Opts } -> WriterT (Array ConvertError) Effect String
 convert cache { opts: opts@{ pick } } = do
