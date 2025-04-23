@@ -22,6 +22,7 @@ import Data.Generic.Rep (class Generic)
 import Data.Map (Map)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe)
+import Data.Show.Generic (genericShow)
 import Data.String (Pattern(..), Replacement(..), replace)
 import Data.String as Str
 import Data.String.Extra (snakeCase)
@@ -130,6 +131,9 @@ data Pick
 
 derive instance Eq Pick
 derive instance Generic Pick _
+
+instance Show Pick where
+  show = genericShow
 
 instance EncodeJson Pick where
   encodeJson = CA.encode codecPick
@@ -274,6 +278,7 @@ converterPurs cache = mkConverter
   { name: "purs"
   , description: "PureScript identifier converter"
   , codecJson: codecOpts
+  , printOpts: show
   , convert: \opts -> do
       (content /\ errors) <- runWriterT $ convert cache opts
       pure { content, errors }

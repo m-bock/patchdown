@@ -41,6 +41,7 @@ type ConverterFields a =
   { name :: String
   , description :: String
   , codecJson :: JsonCodec a
+  , printOpts :: a -> String
   , convert :: { opts :: a } -> Effect ConvertResult
   }
 

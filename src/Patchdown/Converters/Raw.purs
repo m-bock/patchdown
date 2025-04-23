@@ -19,6 +19,7 @@ converterRaw = mkConverter
   { name: "raw"
   , description: "Raw converter"
   , codecJson: codecOpts
+  , printOpts: show
   , convert: \{ opts } -> convert opts
   }
 

@@ -117,10 +117,12 @@ getReplacement converterMap { converterName, yamlStr, enable } = do
   converter <- Map.lookup converterName converterMap
     # liftMaybe (InvalidConverter { json })
 
-  runConverter converter \{ codecJson, convert, name } -> do
+  runConverter converter \{ codecJson, printOpts, convert, name } -> do
     opts <- CA.decode codecJson json
       # lmap (\err -> InvalidOptions { json, err })
       # liftEither
+
+    logInfo tag "parsed converter options" { name, opts: printOpts opts }
 
     let newYamlStr = printYaml $ CA.encode codecJson opts
 
