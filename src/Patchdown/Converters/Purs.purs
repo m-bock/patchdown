@@ -324,8 +324,8 @@ codecOpts = CA.object "Opts" $
     , inline: CAR.optional CA.boolean
     , split: CAR.optional CA.boolean
     }
-    # fieldWithDefault @"split" false
-    # fieldWithDefault @"inline" false
+    # fieldWithDefaultSparse @"split" false not
+    # fieldWithDefaultSparse @"inline" false not
     # fieldWithDefault @"pick" []
 
 mkPickItem :: Pick -> PickItem
