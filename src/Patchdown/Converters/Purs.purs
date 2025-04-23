@@ -418,7 +418,9 @@ codecPick = CA.object "Pick" jpropCodecPick
 jpropCodecPick :: JPropCodec Pick
 jpropCodecPick = sumFlatWith'
   CAS.defaultFlatEncoding
-    { mapTag = replace (Pattern "Pick") (Replacement "") >>> snakeCase
+    { mapTag = replace (Pattern "Pick") (Replacement "")
+        >>> replace (Pattern "Extra") (Replacement "")
+        >>> snakeCase
     }
   "Pick"
   { "PickImport": CAR.record
