@@ -7,7 +7,6 @@ import Prelude
 
 import Control.Monad.Error.Class (class MonadError, liftEither, liftMaybe, throwError, try)
 import Control.Monad.Except (ExceptT, runExceptT)
-import Data.Argonaut (encodeJson)
 import Data.Argonaut.Core (Json)
 import Data.Array (foldMap)
 import Data.Array as Array

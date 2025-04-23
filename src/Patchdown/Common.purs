@@ -112,7 +112,7 @@ mdTicks :: String -> String
 mdTicks str = "`" <> Str.trim str <> "`"
 
 mdCodeBlock :: String -> String -> String
-mdCodeBlock lang str = "\n```" <> lang <> "\n" <> Str.trim str <> "\n```\n"
+mdCodeBlock lang str = "```" <> lang <> "\n" <> Str.trim str <> "\n```"
 
 -- FFI
 
