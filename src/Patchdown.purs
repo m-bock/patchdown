@@ -7,7 +7,7 @@ import Prelude
 
 import Control.Monad.Error.Class (class MonadError, liftEither, liftMaybe, throwError, try)
 import Control.Monad.Except (ExceptT, runExceptT)
-import Data.Argonaut (class EncodeJson, encodeJson)
+import Data.Argonaut (encodeJson)
 import Data.Argonaut.Core (Json)
 import Data.Array (foldMap)
 import Data.Array as Array
@@ -19,6 +19,7 @@ import Data.Foldable (fold, sum)
 import Data.Map (Map)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe')
+import Data.Set (Set)
 import Data.String as Str
 import Data.String.Regex (Regex, regex)
 import Data.String.Regex.Flags as RegFlags
@@ -33,9 +34,12 @@ import Node.FS.Sync (readTextFile, writeTextFile)
 import Node.Process (lookupEnv)
 import Node.Process as Process
 import Partial.Unsafe (unsafeCrashWith)
-import Patchdown.Common (Converter, ConvertError, codeBlock, logInfo, mdH5, mdQuote, print, printYaml, runConverter, yamlToJson)
+import Patchdown.Common (ConvertError, Converter, logInfo, mdCodeBlock, mdH5, mdQuote, print, printYaml, runConverter, yamlToJson)
 import Patchdown.Converters.Purs (mkConverterPurs)
 import Patchdown.Converters.Raw (converterRaw)
+
+tag :: String
+tag = "Patchdown"
 
 type Opts =
   { filePath :: String
@@ -48,41 +52,12 @@ mkStartTag inner = "<!-- PD_START:" <> inner <> "-->"
 endTag :: String
 endTag = "<!-- PD_END -->"
 
-replacePdSection
-  :: String
-  -> ( { converterName :: String, yamlStr :: String, enable :: Boolean }
-       -> Effect { newYamlStr :: String, newContent :: String, errors :: Array ConvertError }
-     )
-  -> Effect { str :: String, countErrors :: Int }
-replacePdSection content replaceFn = do
-  let regexStr = mkStartTag "([a-zA-Z0-9_]*)(\\!?)\\s([\\s\\S]*?)" <> "[\\s\\S]*?" <> endTag
+regexPdSection :: Either String Regex
+regexPdSection = regex
+  (mkStartTag "([a-zA-Z0-9_]*)(\\!?)\\s([\\s\\S]*?)" <> "[\\s\\S]*?" <> endTag)
+  RegFlags.global
 
-  reg <- regex regexStr RegFlags.global
-    # lmap (\_ -> error "invalid regex")
-    # liftEither
-
-  (str /\ vals) <- replaceEffect reg
-    ( \_ matches -> do
-        { converterName, enable, yamlStr } <-
-          case matches of
-            [ Just converterName, Just exclam, Just yamlStr ] -> pure { converterName, enable: exclam /= "!", yamlStr }
-            _ -> throwError (error $ print "invalid matches" { matches })
-
-        { newContent, newYamlStr, errors } <- replaceFn { converterName, yamlStr, enable }
-
-        let
-          str = fold
-            [ mkStartTag (converterName <> (if enable then "" else "!") <> "\n" <> newYamlStr)
-            , foldMap (\err -> errorBoxImpl converterName (err.message) err.value) errors
-            , newContent
-            , endTag
-            ]
-
-        pure (str /\ Array.length errors)
-    )
-    content
-
-  pure { str, countErrors: sum vals }
+type PdMatches = { converterName :: String, yamlStr :: String, enable :: Boolean }
 
 data Err
   = InvalidYaml { err :: String }
@@ -90,43 +65,75 @@ data Err
   | InvalidConverter { json :: Json }
   | ConverterError { newYamlStr :: String, err :: String }
 
-mapErrEff :: forall e m a. MonadEffect m => MonadError e m => (Error -> e) -> Effect a -> m a
-mapErrEff mpErr eff = do
-  ret :: Either Error a <- liftEffect (try eff)
-  case ret of
-    Left err -> throwError (mpErr err)
-    Right val -> pure val
+type PdReplacementInputs =
+  { converterName :: String
+  , yamlStr :: String
+  , enable :: Boolean
+  }
 
-tag :: String
-tag = "Patchdown"
+type PdReplacementOutputs =
+  { newYamlStr :: String
+  , newContent :: String
+  , errors :: Array ConvertError
+  }
 
-getReplacement
-  :: Map String Converter
-  -> { converterName :: String, yamlStr :: String, enable :: Boolean }
-  -> ExceptT Err Effect { newYamlStr :: String, newContent :: String, errors :: Array ConvertError }
+replaceAllPdSections
+  :: String
+  -> (PdReplacementInputs -> Effect PdReplacementOutputs)
+  -> Effect { str :: String, countErrors :: Int }
+replaceAllPdSections content replaceFn = do
+  reg <- regexPdSection
+    # lmap (\_ -> error "invalid regex")
+    # liftEither
+
+  (str /\ vals) <- replaceEffect reg
+    ( \_ matches -> do
+        pdMatches <- parseMatches matches
+          # liftMaybe (error $ print "invalid matches" { matches })
+
+        relaceOutputs@{ errors } <- replaceFn pdMatches
+
+        let
+          str = mdPdSection pdMatches relaceOutputs
+
+        pure (str /\ Array.length errors)
+    )
+    content
+
+  pure { str, countErrors: sum vals }
+
+parseMatches :: Array (Maybe String) -> Maybe PdMatches
+parseMatches matches =
+  case matches of
+    [ Just converterName, Just exclam, Just yamlStr ] ->
+      Just { converterName, enable: exclam /= "!", yamlStr }
+    _ -> Nothing
+
+getReplacement :: Map String Converter -> PdReplacementInputs -> ExceptT Err Effect PdReplacementOutputs
 getReplacement converterMap { converterName, yamlStr, enable } = do
-  json <- yamlToJson yamlStr # mapErrEff \err -> InvalidYaml { err: message err }
+  json <- yamlToJson yamlStr
+    # mapErrEff \err -> InvalidYaml { err: message err }
 
   converter <- Map.lookup converterName converterMap
     # liftMaybe (InvalidConverter { json })
 
-  runConverter converter
-    ( \{ codecJson, convert, name } -> do
-        opts <- CA.decode codecJson json # lmap (\err -> InvalidOptions { json, err }) # liftEither
+  runConverter converter \{ codecJson, convert, name } -> do
+    opts <- CA.decode codecJson json
+      # lmap (\err -> InvalidOptions { json, err })
+      # liftEither
 
-        let newYamlStr = printYaml $ CA.encode codecJson opts
+    let newYamlStr = printYaml $ CA.encode codecJson opts
 
-        { content, errors } <-
-          if enable then do
-            logInfo tag "run converter" { name }
-            convert { opts } # mapErrEff (\err -> ConverterError { newYamlStr, err: message err })
-          else do
-            logInfo tag "skip converter" { name }
-            pure { content: "", errors: [] }
+    { content, errors } <-
+      if enable then do
+        logInfo tag "run converter" { name }
+        convert { opts } # mapErrEff (\err -> ConverterError { newYamlStr, err: message err })
+      else do
+        logInfo tag "skip converter" { name }
+        pure { content: "", errors: [] }
 
-        pure
-          { newContent: content, newYamlStr, errors }
-    )
+    pure
+      { newContent: content, newYamlStr, errors }
 
 run :: Opts -> Effect { countErrors :: Int }
 run { filePath, converters } = do
@@ -138,46 +145,51 @@ run { filePath, converters } = do
   fileContent <- readTextFile UTF8 filePath
 
   { str: patchedFileContent, countErrors } <-
-    replacePdSection fileContent \opts@{ converterName, yamlStr } -> do
+    replaceAllPdSections fileContent \opts -> do
       ret <- runExceptT $ getReplacement converterMap opts
-
-      pure case ret of
-        Left (InvalidYaml { err }) ->
-          { newYamlStr: yamlStr
-          , newContent: ""
-          , errors: [ { message: err, value: Nothing } ]
-          }
-        Left (InvalidOptions { json, err }) ->
-          { newYamlStr: printYaml json
-          , newContent: ""
-          , errors: [ { message: printJsonDecodeError err, value: Just json } ]
-          }
-        Left (InvalidConverter { json }) ->
-          { newYamlStr: printYaml json
-          , newContent: ""
-          , errors:
-              [ { message: "Converter not found"
-                , value: Just $ encodeJson
-                    { converterName
-                    , converterNames
-                    }
-                }
-              ]
-          }
-        Left (ConverterError { newYamlStr, err }) ->
-          { newYamlStr
-          , newContent: ""
-          , errors:
-              [ { message: err
-                , value: Nothing
-                }
-              ]
-          }
-        Right val -> val
+      pure $ mkPdReplacementOutputs opts { converterNames } ret
 
   writeTextFile UTF8 filePath patchedFileContent
-
   pure { countErrors }
+
+mkPdReplacementOutputs
+  :: PdReplacementInputs
+  -> { converterNames :: Set String }
+  -> Either Err PdReplacementOutputs
+  -> PdReplacementOutputs
+mkPdReplacementOutputs { yamlStr, converterName } { converterNames } = case _ of
+  Left (InvalidYaml { err }) ->
+    { newYamlStr: yamlStr
+    , newContent: ""
+    , errors: [ { message: err, value: Nothing } ]
+    }
+  Left (InvalidOptions { json, err }) ->
+    { newYamlStr: printYaml json
+    , newContent: ""
+    , errors: [ { message: printJsonDecodeError err, value: Just json } ]
+    }
+  Left (InvalidConverter { json }) ->
+    { newYamlStr: printYaml json
+    , newContent: ""
+    , errors:
+        [ { message: "Converter not found"
+          , value: Just $ encodeJson
+              { converterName
+              , converterNames
+              }
+          }
+        ]
+    }
+  Left (ConverterError { newYamlStr, err }) ->
+    { newYamlStr
+    , newContent: ""
+    , errors:
+        [ { message: err
+          , value: Nothing
+          }
+        ]
+    }
+  Right val -> val
 
 main :: Effect Unit
 main = do
@@ -189,24 +201,53 @@ main = do
   let converters = [ pursConverter ] <> [ converterRaw ]
 
   let
-    opts =
-      { filePath
-      , converters
-      }
+    opts = { filePath, converters }
 
   { countErrors } <- run opts
 
   unless (countErrors == 0) do
     Process.exit' 1
 
-foreign import replaceEffectImpl
-  :: EffectFn5
-       (forall r. r -> Maybe r)
-       (forall r. Maybe r)
-       Regex
-       (EffectFn2 String (Array (Maybe String)) String)
-       String
-       String
+-- Markdown
+
+mdErrorBox :: String -> String -> Maybe Json -> String
+mdErrorBox sectionName message val = wrapNl $ mdQuote $ Str.joinWith "\n"
+  [ "<br>"
+  , "🛑 Error at section `" <> sectionName <> "`"
+  , ""
+  , mdH5 message
+  , case val of
+      Just v -> mdCodeBlock "yaml" (printYaml v)
+      Nothing -> ""
+  , "<br>"
+  ]
+
+mdPdSection :: PdMatches -> PdReplacementOutputs -> String
+mdPdSection { converterName, enable } { newYamlStr, errors, newContent } =
+  let
+    startTag = mkStartTag
+      (converterName <> (if enable then "" else "!") <> "\n" <> newYamlStr)
+
+    errorBoxes = foldMap
+      (\err -> mdErrorBox converterName (err.message) err.value)
+      errors
+
+  in
+    fold
+      [ startTag
+      , errorBoxes
+      , newContent
+      , endTag
+      ]
+
+--- Utils
+
+mapErrEff :: forall e m a. MonadEffect m => MonadError e m => (Error -> e) -> Effect a -> m a
+mapErrEff mpErr eff = do
+  ret :: Either Error a <- liftEffect (try eff)
+  case ret of
+    Left err -> throwError (mpErr err)
+    Right val -> pure val
 
 replaceEffect :: forall a. Regex -> (String -> Array (Maybe String) -> Effect (String /\ a)) -> String -> Effect (String /\ Array a)
 replaceEffect reg replFn oldStr = do
@@ -222,25 +263,16 @@ replaceEffect reg replFn oldStr = do
   vals <- Ref.read refVals
   pure (newStr /\ vals)
 
---replaceEffectImpl Just Nothing
-
-errorBox :: forall a. EncodeJson a => String -> String -> a -> String
-errorBox sectionName message val = errorBoxImpl sectionName message (Just $ encodeJson val)
-
-errorBox_ :: String -> String -> String
-errorBox_ sectionName message = errorBoxImpl sectionName message Nothing
-
-errorBoxImpl :: String -> String -> Maybe Json -> String
-errorBoxImpl sectionName message val = wrapNl $ mdQuote $ Str.joinWith "\n"
-  [ "<br>"
-  , "🛑 Error at section `" <> sectionName <> "`"
-  , ""
-  , mdH5 message
-  , case val of
-      Just v -> codeBlock "yaml" (printYaml v)
-      Nothing -> ""
-  , "<br>"
-  ]
-
 wrapNl :: String -> String
 wrapNl str = "\n" <> str <> "\n"
+
+--- FFI
+
+foreign import replaceEffectImpl
+  :: EffectFn5
+       (forall r. r -> Maybe r)
+       (forall r. Maybe r)
+       Regex
+       (EffectFn2 String (Array (Maybe String)) String)
+       String
+       String

@@ -9,7 +9,6 @@ import Control.Monad.Error.Class (throwError)
 import Control.Monad.Writer (WriterT, runWriterT)
 import Control.Monad.Writer.Class (tell)
 import Data.Argonaut.Core (Json)
-import Data.Argonaut.Decode.Class (class DecodeJson)
 import Data.Argonaut.Encode.Class (class EncodeJson, encodeJson)
 import Data.Array as Array
 import Data.Codec (Codec, Codec')
@@ -31,12 +30,11 @@ import Data.Traversable (for)
 import Data.Tuple.Nested ((/\))
 import Effect (Effect)
 import Effect.Class (liftEffect)
-import Effect.Exception (message)
 import Effect.Exception as Exc
 import Effect.Ref as Ref
 import Node.Encoding (Encoding(..))
 import Node.FS.Sync as NodeFS
-import Patchdown.Common (Converter, ConvertError, codeBlock, mdTicks, mkConverter)
+import Patchdown.Common (Converter, ConvertError, mdCodeBlock, mdTicks, mkConverter)
 import Prim.Row (class Cons, class Union)
 import PureScript.CST (RecoveredParserResult(..), parseModule)
 import PureScript.CST.Errors as CSTErr
@@ -56,9 +54,9 @@ getModuleCst :: String -> Effect (CST.Module Void)
 getModuleCst content = case parseModule content of
   ParseSucceeded cst ->
     pure cst
-  ParseSucceededWithErrors cst errors ->
+  ParseSucceededWithErrors _ _ ->
     throwError $ Exc.error "success with errors"
-  ParseFailed { error, position } ->
+  ParseFailed { error } ->
     throwError $ Exc.error $ CSTErr.printParseError error
 
 mkCache :: Effect Cache
@@ -121,9 +119,6 @@ data Pick
       { name :: String
       }
 
-derive instance Eq Pick
-derive instance Generic Pick _
-
 -- PickModuleHeader
 -- PickClass { name :: String, filePath :: Maybe String }
 -- PickInstancechain
@@ -133,48 +128,53 @@ derive instance Generic Pick _
 -- PickFixity
 -- PickRole
 
+derive instance Eq Pick
+derive instance Generic Pick _
+
+instance EncodeJson Pick where
+  encodeJson = CA.encode codecPick
+
 data Source
   = SrcImport (CST.ImportDecl Void)
   | SrcDecl (CST.Declaration Void)
 
 getSources :: CST.Module Void -> Array Source
-getSources
-  ( CST.Module
-      { header: CST.ModuleHeader { imports }
-      , body: CST.ModuleBody { decls }
-      }
-  ) = map SrcImport imports <> map SrcDecl decls
+getSources (CST.Module { header, body }) =
+  let
+    CST.ModuleHeader { imports } = header
+    CST.ModuleBody { decls } = body
+  in
+    map SrcImport imports <> map SrcDecl decls
 
-getNames :: Array Source -> { signatures :: Array String, imports :: Array String, types :: Array String, values :: Array String }
-getNames sources =
+type NameInfo =
+  { signatures :: Array String
+  , imports :: Array String
+  , types :: Array String
+  , values :: Array String
+  }
+
+getNames :: Array Source -> NameInfo
+getNames =
   foldl
     ( \accum -> case _ of
-        SrcDecl (CST.DeclType r _ _) ->
-          Record.modify (Proxy :: _ "types") (_ <> [ getNameProper r.name ]) accum
+        SrcDecl (CST.DeclType r _ _) -> Record.modify
+          (Proxy :: _ "types")
+          (_ <> [ getNameProper r.name ])
+          accum
 
-        SrcDecl (CST.DeclSignature (CST.Labeled r)) ->
-          Record.modify (Proxy :: _ "signatures") (_ <> [ getNameIdent r.label ]) accum
+        SrcDecl (CST.DeclSignature (CST.Labeled r)) -> Record.modify
+          (Proxy :: _ "signatures")
+          (_ <> [ getNameIdent r.label ])
+          accum
 
-        SrcDecl (CST.DeclValue r) ->
-          Record.modify (Proxy :: _ "values") (_ <> [ getNameIdent r.name ]) accum
+        SrcDecl (CST.DeclValue r) -> Record.modify
+          (Proxy :: _ "values")
+          (_ <> [ getNameIdent r.name ])
+          accum
 
         _ -> accum
     )
-    { signatures: [], imports: [], types: [], values: [] }
-    sources
-
-declToName :: CST.Declaration Void -> Maybe String
-declToName = case _ of
-  CST.DeclType r _ _ -> Just $ getNameProper r.name
-  CST.DeclSignature (CST.Labeled r) -> Just $ getNameIdent r.label
-  CST.DeclValue r -> Just $ getNameIdent r.name
-  _ -> Nothing
-
-getNameProper :: CST.Name CST.Proper -> String
-getNameProper (CST.Name { name: CST.Proper name }) = name
-
-getNameIdent :: CST.Name CST.Ident -> String
-getNameIdent (CST.Name { name: CST.Ident name }) = name
+    mempty
 
 matchOnePick :: Pick -> Source -> Array String
 matchOnePick pick decl = case pick of
@@ -252,7 +252,7 @@ converterPurs cache = mkConverter
 getWrapFn :: Opts -> { wrapInner :: String -> String, wrapOuter :: String -> String }
 getWrapFn { split, inline } =
   let
-    wrapFn = if inline then mdTicks else codeBlock "purescript"
+    wrapFn = if inline then mdTicks else mdCodeBlock "purescript"
   in
     { wrapInner: if split then wrapFn else identity
     , wrapOuter: if split then identity else wrapFn
@@ -327,14 +327,10 @@ codecPickItem = CA.codec' dec enc
       , prefix: CAR.optional CA.string
       }
 
-instance EncodeJson Pick where
-  encodeJson = CA.encode codecPick
-
 codecPick :: JsonCodec Pick
 codecPick = CA.codec' dec enc
   where
-  can :: JsonCodec Pick
-  can = CAS.sumFlatWith
+  codecCanonical = CAS.sumFlatWith
     CAS.defaultFlatEncoding
       { mapTag = replace (Pattern "Pick") (Replacement "") >>> snakeCase
       }
@@ -376,30 +372,14 @@ codecPick = CA.codec' dec enc
 
   enc = case _ of
     PickExtraAny { name } -> CA.encode CA.string name
-    other -> CA.encode can other
+    other -> CA.encode codecCanonical other
 
   dec j =
     ( do
         name <- CA.decode CA.string j
         pure (PickExtraAny { name })
-    ) <|> CA.decode can j
-
---- Utils
-
-altDec :: forall a. (Json -> Either JsonDecodeError a) -> JsonCodec a -> JsonCodec a
-altDec dec c = CA.codec' dec' enc
-  where
-  dec' :: Json -> Either JsonDecodeError a
-  dec' j = dec j <|> CA.decode c j
-
-  enc :: a -> Json
-  enc = CA.encode c
-
-oneOrMany :: forall a. JsonCodec a -> JsonCodec (Array a)
-oneOrMany c = altDec (map Array.singleton <<< CA.decode c) (CA.array c)
-
-pickFields :: forall r1 r2 t. Union r2 t r1 => Record r1 -> Record r2
-pickFields = unsafeCoerce
+    )
+      <|> CA.decode codecCanonical j
 
 ---
 
@@ -427,16 +407,6 @@ fieldWithDefault
   -> Codec m a b (Record r) (Record r)
   -> Codec m a b (Record r') (Record r')
 fieldWithDefault defDec = fieldDimap @sym Just (fromMaybe defDec)
-
-fieldOptionalChatty
-  :: forall @sym m x r t a b
-   . IsSymbol sym
-  => Monad m
-  => Cons sym (Maybe x) t r
-  => x
-  -> Codec m a b (Record r) (Record r)
-  -> Codec m a b (Record r) (Record r)
-fieldOptionalChatty defEnc = fieldDimap @sym (fromMaybe defEnc >>> Just) identity
 
 fieldDimap
   :: forall @sym m x y r r' t a b
@@ -484,3 +454,21 @@ printTokens :: forall a. TokensOf a => a -> String
 printTokens cst =
   foldMap Print.printSourceToken (TokenList.toArray (tokensOf cst))
     # Str.trim
+
+altDec :: forall a. (Json -> Either JsonDecodeError a) -> JsonCodec a -> JsonCodec a
+altDec dec c = CA.codec' dec' enc
+  where
+  dec' :: Json -> Either JsonDecodeError a
+  dec' j = dec j <|> CA.decode c j
+
+  enc :: a -> Json
+  enc = CA.encode c
+
+oneOrMany :: forall a. JsonCodec a -> JsonCodec (Array a)
+oneOrMany c = altDec (map Array.singleton <<< CA.decode c) (CA.array c)
+
+getNameProper :: CST.Name CST.Proper -> String
+getNameProper (CST.Name { name: CST.Proper name }) = name
+
+getNameIdent :: CST.Name CST.Ident -> String
+getNameIdent (CST.Name { name: CST.Ident name }) = name
