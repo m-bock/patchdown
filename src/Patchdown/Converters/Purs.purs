@@ -300,7 +300,7 @@ getWrapFn { split, inline } =
     wrapFn = if inline then mdTicks else mdCodeBlock "purescript"
   in
     { wrapInner: if split then wrapFn else identity
-    , wrapOuter: wrapNl <<< if split then identity else wrapFn
+    , wrapOuter: wrapNl <<< wrapNl <<< if split then identity else wrapFn
     }
 
 convert :: Cache -> { opts :: Opts } -> WriterT (Array ConvertError) Effect String
