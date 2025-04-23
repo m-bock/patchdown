@@ -232,9 +232,12 @@ matchOnePick pick decl = case pick of
       | name == getNameIdent r.label -> [ printTokens all ]
     _ -> []
 
-  PickForeignValue { name } -> case decl of
-    SrcDecl all@(CST.DeclForeign _ _ (CST.ForeignValue (CST.Labeled r)))
-      | name == getNameIdent r.label -> [ printTokens all <> "\n" ]
+  PickForeignValue { name, stripImport } -> case decl of
+    SrcDecl (CST.DeclForeign v1 v2 v3@(CST.ForeignValue (CST.Labeled r)))
+      | name == getNameIdent r.label ->
+          [ if stripImport then "" else Print.printSourceToken v1 <> Print.printSourceToken v2
+          , printTokens v3 <> "\n"
+          ]
     _ -> []
 
   PickValue { name } -> case decl of
