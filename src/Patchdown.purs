@@ -34,7 +34,7 @@ import Node.FS.Sync (readTextFile, writeTextFile)
 import Node.Process (lookupEnv)
 import Node.Process as Process
 import Partial.Unsafe (unsafeCrashWith)
-import Patchdown.Common (ConvertError, Converter, logInfo, mdCodeBlock, mdH5, mdQuote, print, printYaml, runConverter, yamlToJson)
+import Patchdown.Common (ConvertError, Converter, logInfo, mdCodeBlock, mdH5, mdQuote, mkConvertError, mkConvertError_, print, printYaml, runConverter, yamlToJson)
 import Patchdown.Converters.Purs (mkConverterPurs)
 import Patchdown.Converters.Raw (converterRaw)
 
@@ -163,33 +163,22 @@ mkPdReplacementOutputs { yamlStr, converterName } { converterNames } = case _ of
   Left (InvalidYaml { err }) ->
     { newYamlStr: yamlStr
     , newContent: ""
-    , errors: [ { message: err, value: Nothing } ]
+    , errors: [ mkConvertError_ err ]
     }
   Left (InvalidOptions { json, err }) ->
     { newYamlStr: printYaml json
     , newContent: ""
-    , errors: [ { message: printJsonDecodeError err, value: Just json } ]
+    , errors: [ mkConvertError (printJsonDecodeError err) { json } ]
     }
   Left (InvalidConverter { json }) ->
     { newYamlStr: printYaml json
     , newContent: ""
-    , errors:
-        [ { message: "Converter not found"
-          , value: Just $ encodeJson
-              { converterName
-              , converterNames
-              }
-          }
-        ]
+    , errors: [ mkConvertError "Converter not found" { converterName, converterNames } ]
     }
   Left (ConverterError { newYamlStr, err }) ->
     { newYamlStr
     , newContent: ""
-    , errors:
-        [ { message: err
-          , value: Nothing
-          }
-        ]
+    , errors: [ mkConvertError_ err ]
     }
   Right val -> val
 

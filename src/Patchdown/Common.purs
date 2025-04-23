@@ -13,6 +13,8 @@ module Patchdown.Common
   , mdH5
   , mdQuote
   , mdTicks
+  , mkConvertError
+  , mkConvertError_
   , mkConverter
   , print
   , printYaml
@@ -54,6 +56,12 @@ type ConvertError =
   { message :: String
   , value :: Maybe Json
   }
+
+mkConvertError_ :: String -> ConvertError
+mkConvertError_ msg = { message: msg, value: Nothing }
+
+mkConvertError :: forall a. EncodeJson a => String -> a -> ConvertError
+mkConvertError msg val = { message: msg, value: Just $ encodeJson val }
 
 newtype Converter = Converter (Exists MkConverter)
 

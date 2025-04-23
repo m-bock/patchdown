@@ -39,7 +39,7 @@ import Foreign.Object (Object)
 import Foreign.Object as Obj
 import Node.Encoding (Encoding(..))
 import Node.FS.Sync as NodeFS
-import Patchdown.Common (Converter, ConvertError, mdCodeBlock, mdTicks, mkConverter)
+import Patchdown.Common (ConvertError, Converter, mdCodeBlock, mdTicks, mkConvertError, mkConverter)
 import Prim.Row (class Cons, class Union)
 import PureScript.CST (RecoveredParserResult(..), parseModule)
 import PureScript.CST.Errors as CSTErr
@@ -47,7 +47,6 @@ import PureScript.CST.Print as Print
 import PureScript.CST.Range (class TokensOf, tokensOf)
 import PureScript.CST.Range.TokenList (TokenList)
 import PureScript.CST.Range.TokenList as TokenList
-import PureScript.CST.Types (Declaration)
 import PureScript.CST.Types as CST
 import Record as Record
 import Type.Prelude (Proxy(..))
@@ -304,10 +303,6 @@ getWrapFn { split, inline } =
     , wrapOuter: wrapNl <<< if split then identity else wrapFn
     }
 
-wrapNl :: String -> String
-wrapNl str =
-  "\n" <> str <> "\n"
-
 convert :: Cache -> { opts :: Opts } -> WriterT (Array ConvertError) Effect String
 convert cache { opts: opts@{ pick } } = do
   let { wrapInner, wrapOuter } = getWrapFn opts
@@ -319,10 +314,7 @@ convert cache { opts: opts@{ pick } } = do
 
         when (results == []) do
           tell
-            [ { message: "no values found"
-              , value: Just $ encodeJson { pick, names: getNames sources }
-              }
-            ]
+            [ mkConvertError "no values found" { pick, names: getNames sources } ]
 
         let
           addPrefix val = case prefix of
@@ -571,3 +563,7 @@ getNameIdent (CST.Name { name: CST.Ident name }) = name
 
 subsetFields :: forall r t r'. Union r t r' => Record r' -> Record r
 subsetFields = unsafeCoerce
+
+wrapNl :: String -> String
+wrapNl str =
+  "\n" <> str <> "\n"
