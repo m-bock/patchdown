@@ -108,7 +108,7 @@ data Pick
   | PickSignature
       { name :: String }
   | PickForeignValue
-      { name :: String }
+      { name :: String, stripImport :: Boolean }
   | PickValue
       { name :: String }
 
@@ -254,7 +254,7 @@ matchOnePick pick decl = case pick of
   PickExtraSignatureOrForeign { name } ->
     matchManyPicks
       [ PickSignature { name }
-      , PickForeignValue { name }
+      , PickForeignValue { name, stripImport: true }
       ]
       decl
 
@@ -265,7 +265,7 @@ matchOnePick pick decl = case pick of
       , PickNewtype { name }
       , PickType { name }
       , PickSignature { name }
-      , PickForeignValue { name }
+      , PickForeignValue { name, stripImport: false }
       , PickValue { name }
       ]
       decl
@@ -436,9 +436,12 @@ jpropCodecPick = sumFlatWith'
   , "PickSignature": CAR.record
       { name: CA.string
       }
-  , "PickForeignValue": CAR.record
-      { name: CA.string
-      }
+  , "PickForeignValue":
+      CAR.record
+        { name: CA.string
+        , stripImport: CAR.optional CA.boolean
+        }
+        # fieldWithDefault @"stripImport" false
   , "PickValue": CAR.record
       { name: CA.string
       }
