@@ -101,7 +101,7 @@ mdH5 :: String -> String
 mdH5 str = "##### " <> str
 
 mdTicks :: String -> String
-mdTicks str = "`" <> str <> "`"
+mdTicks str = "`" <> Str.trim str <> "`"
 
 mdCodeBlock :: String -> String -> String
 mdCodeBlock lang str = "\n```" <> lang <> "\n" <> Str.trim str <> "\n```\n"
