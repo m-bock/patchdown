@@ -46,6 +46,7 @@ import PureScript.CST.Errors as CSTErr
 import PureScript.CST.Print as Print
 import PureScript.CST.Range (class TokensOf, tokensOf)
 import PureScript.CST.Range.TokenList as TokenList
+import PureScript.CST.Types (Declaration)
 import PureScript.CST.Types as CST
 import Record as Record
 import Type.Prelude (Proxy(..))
@@ -381,9 +382,6 @@ codecPickItem = CA.object "PickItem" $ CA.codec dec enc
       , prefix: CAR.optional CA.string
       }
 
-subsetFields :: forall r t r'. Union r t r' => Record r' -> Record r
-subsetFields = unsafeCoerce
-
 sumFlatWith'
   :: forall @tag r rep a
    . GFlatCases tag r rep
@@ -397,20 +395,20 @@ sumFlatWith'
 sumFlatWith' opt name r = CA.codec dec enc
   where
   dec :: Object Json -> Either JsonDecodeError a
-  dec obj = CA.decode c (encodeJson obj)
+  dec obj = CA.decode codec (encodeJson obj)
 
   enc :: a -> List (String /\ Json)
   enc val =
     let
       j :: Json
-      j = CA.encode c val
+      j = CA.encode codec val
 
       obj :: Object Json
       obj = unsafeCoerce j
     in
       Obj.toUnfoldable obj
 
-  c = CAS.sumFlatWith opt name r
+  codec = CAS.sumFlatWith opt name r
 
 codecPick :: JsonCodec Pick
 codecPick = CA.object "Pick" jpropCodecPick
@@ -529,8 +527,13 @@ fieldCompose codec1 codec2 = CA.codec dec enc
 
 printTokens :: forall a. TokensOf a => a -> String
 printTokens cst =
-  foldMap Print.printSourceToken (TokenList.toArray (tokensOf cst))
-    # Str.trim
+  let
+    sourceTokens =
+      TokenList.toArray (tokensOf cst)
+        # Array.modifyAtIndices [ 0 ] (\r -> r { leadingComments = [] })
+  in
+    foldMap Print.printSourceToken sourceTokens
+      # Str.trim
 
 altDec :: forall a. (Json -> Either JsonDecodeError a) -> JsonCodec a -> JsonCodec a
 altDec dec c = CA.codec' dec' enc
@@ -549,3 +552,6 @@ getNameProper (CST.Name { name: CST.Proper name }) = name
 
 getNameIdent :: CST.Name CST.Ident -> String
 getNameIdent (CST.Name { name: CST.Ident name }) = name
+
+subsetFields :: forall r t r'. Union r t r' => Record r' -> Record r
+subsetFields = unsafeCoerce
