@@ -236,10 +236,9 @@ matchOnePick pick decl = case pick of
   PickForeignValue { name, stripImport } -> case decl of
     SrcDecl (CST.DeclForeign v1 v2 v3@(CST.ForeignValue (CST.Labeled r)))
       | name == getNameIdent r.label ->
-          [ ( if stripImport then ""
-              else printTokenList $ TokenList.fromArray [ v1, v2 ]
+          [ ( if stripImport then printTokens v3
+              else printTokenList $ (TokenList.fromArray [ v1, v2 ] <> tokensOf v3)
             )
-              <> printTokens v3
               <> "\n"
           ]
     _ -> []
