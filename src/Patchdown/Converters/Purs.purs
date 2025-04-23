@@ -12,13 +12,15 @@ import Data.Argonaut.Core (Json)
 import Data.Argonaut.Encode.Class (class EncodeJson, encodeJson)
 import Data.Array as Array
 import Data.Codec (Codec, Codec')
-import Data.Codec.Argonaut (JsonCodec, JsonDecodeError)
+import Data.Codec.Argonaut (JPropCodec, JsonCodec, JsonDecodeError)
 import Data.Codec.Argonaut as CA
 import Data.Codec.Argonaut.Record as CAR
+import Data.Codec.Argonaut.Sum (class GFlatCases)
 import Data.Codec.Argonaut.Sum as CAS
 import Data.Either (Either)
 import Data.Foldable (foldMap, foldl)
 import Data.Generic.Rep (class Generic)
+import Data.List (List)
 import Data.Map (Map)
 import Data.Map as Map
 import Data.Maybe (Maybe(..), fromMaybe)
@@ -28,11 +30,13 @@ import Data.String as Str
 import Data.String.Extra (snakeCase)
 import Data.Symbol (class IsSymbol)
 import Data.Traversable (for)
-import Data.Tuple.Nested ((/\))
+import Data.Tuple.Nested (type (/\), (/\))
 import Effect (Effect)
 import Effect.Class (liftEffect)
 import Effect.Exception as Exc
 import Effect.Ref as Ref
+import Foreign.Object (Object)
+import Foreign.Object as Obj
 import Node.Encoding (Encoding(..))
 import Node.FS.Sync as NodeFS
 import Patchdown.Common (Converter, ConvertError, mdCodeBlock, mdTicks, mkConverter)
@@ -325,7 +329,7 @@ codecOpts :: JsonCodec Opts
 codecOpts = CA.object "Opts" $
   CAR.record
     { filePath: CAR.optional CA.string
-    , pick: CAR.optional (oneOrMany codecPickItem)
+    , pick: CAR.optional (oneOrMany codecPickItemShorthand)
     , inline: CAR.optional CA.boolean
     , split: CAR.optional CA.boolean
     }
@@ -340,81 +344,117 @@ mkPickItem pick =
   , pick
   }
 
-codecPickItem :: JsonCodec PickItem
-codecPickItem = CA.codec' dec enc
+codecPickItemShorthand :: JsonCodec PickItem
+codecPickItemShorthand = CA.codec' dec enc
   where
   dec j =
     ( do
-        pick <- CA.decode codecPick j
-        pure $ mkPickItem pick
-    ) <|> CA.decode codecCanonical j
+        str <- CA.decode CA.string j
+        pure $ mkPickItem $ PickExtraAny { name: str }
+    ) <|> do
+      CA.decode codecPickItem j
 
   enc val =
-    if val == mkPickItem val.pick then
-      CA.encode codecPick val.pick
-    else
-      CA.encode codecCanonical val
+    case val.pick of
+      PickExtraAny { name } | mkPickItem val.pick == val -> CA.encode CA.string name
+      _ -> CA.encode codecPickItem val
 
-  codecCanonical =
-    CAR.object "PickItem"
+codecPickItem :: JsonCodec PickItem
+codecPickItem = CA.object "PickItem" $ CA.codec dec enc
+  where
+  dec obj = do
+    pick <- CA.decode jpropCodecPick obj
+    fields <- CA.decode codecFields obj
+
+    pure $ Record.insert (Proxy :: _ "pick") pick fields
+
+  enc val =
+    let
+      pick = CA.encode jpropCodecPick val.pick
+      fields = CA.encode codecFields (subsetFields val)
+    in
+      pick <> fields
+
+  codecFields =
+    CAR.record
       { filePath: CAR.optional CA.string
-      , pick: codecPick
       , prefix: CAR.optional CA.string
       }
 
-codecPick :: JsonCodec Pick
-codecPick = CA.codec' dec enc
+subsetFields :: forall r t r'. Union r t r' => Record r' -> Record r
+subsetFields = unsafeCoerce
+
+sumFlatWith'
+  :: forall @tag r rep a
+   . GFlatCases tag r rep
+  => Generic a rep
+  => { mapTag :: String -> String
+     , tag :: Proxy tag
+     }
+  -> String
+  -> Record r
+  -> JPropCodec a
+sumFlatWith' opt name r = CA.codec dec enc
   where
-  codecCanonical = CAS.sumFlatWith
-    CAS.defaultFlatEncoding
-      { mapTag = replace (Pattern "Pick") (Replacement "") >>> snakeCase
-      }
-    "Pick"
-    { "PickImport": CAR.record
-        { moduleName: CAR.optional CA.string
-        }
-    , "PickData": CAR.record
-        { name: CA.string
-        }
-    , "PickNewtype": CAR.record
-        { name: CA.string
-        }
-    , "PickType": CAR.record
-        { name: CA.string
-        }
-    , "PickSignature": CAR.record
-        { name: CA.string
-        }
-    , "PickForeignValue": CAR.record
-        { name: CA.string
-        }
-    , "PickValue": CAR.record
-        { name: CA.string
-        }
-    , "PickExtraTypeRecord": CAR.record
-        { name: CA.string
-        }
-    , "PickExtraSignatureOrForeign": CAR.record
-        { name: CA.string
-        }
-    , "PickExtraValueAndSignature": CAR.record
-        { name: CA.string
-        }
-    , "PickExtraAny": CAR.record
-        { name: CA.string
-        }
+  dec :: Object Json -> Either JsonDecodeError a
+  dec obj = CA.decode c (encodeJson obj)
+
+  enc :: a -> List (String /\ Json)
+  enc val =
+    let
+      j :: Json
+      j = CA.encode c val
+
+      obj :: Object Json
+      obj = unsafeCoerce j
+    in
+      Obj.toUnfoldable obj
+
+  c = CAS.sumFlatWith opt name r
+
+codecPick :: JsonCodec Pick
+codecPick = CA.object "Pick" jpropCodecPick
+
+jpropCodecPick :: JPropCodec Pick
+jpropCodecPick = sumFlatWith'
+  CAS.defaultFlatEncoding
+    { mapTag = replace (Pattern "Pick") (Replacement "") >>> snakeCase
     }
-
-  enc = case _ of
-    PickExtraAny { name } -> CA.encode CA.string name
-    other -> CA.encode codecCanonical other
-
-  dec j =
-    ( do
-        name <- CA.decode CA.string j
-        pure (PickExtraAny { name })
-    )
-      <|> CA.decode codecCanonical j
+  "Pick"
+  { "PickImport": CAR.record
+      { moduleName: CAR.optional CA.string
+      }
+  , "PickData": CAR.record
+      { name: CA.string
+      }
+  , "PickNewtype": CAR.record
+      { name: CA.string
+      }
+  , "PickType": CAR.record
+      { name: CA.string
+      }
+  , "PickSignature": CAR.record
+      { name: CA.string
+      }
+  , "PickForeignValue": CAR.record
+      { name: CA.string
+      }
+  , "PickValue": CAR.record
+      { name: CA.string
+      }
+  , "PickExtraTypeRecord": CAR.record
+      { name: CA.string
+      }
+  , "PickExtraSignatureOrForeign": CAR.record
+      { name: CA.string
+      }
+  , "PickExtraValueAndSignature": CAR.record
+      { name: CA.string
+      }
+  , "PickExtraAny": CAR.record
+      { name: CA.string
+      }
+  }
 
 ---
 
