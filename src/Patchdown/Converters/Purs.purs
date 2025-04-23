@@ -101,7 +101,7 @@ data Pick
       { name :: String }
   | PickSignature
       { name :: String }
-  | PickForeign
+  | PickForeignValue
       { name :: String }
   | PickValue
       { name :: String }
@@ -147,9 +147,12 @@ getSources (CST.Module { header, body }) =
     map SrcImport imports <> map SrcDecl decls
 
 type NameInfo =
-  { signatures :: Array String
-  , imports :: Array String
+  { imports :: Array String
+  , dataTypes :: Array String
+  , newtypes :: Array String
   , types :: Array String
+  , signatures :: Array String
+  , foreignValues :: Array String
   , values :: Array String
   }
 
@@ -157,6 +160,16 @@ getNames :: Array Source -> NameInfo
 getNames =
   foldl
     ( \accum -> case _ of
+        SrcDecl (CST.DeclData r _) -> Record.modify
+          (Proxy :: _ "dataTypes")
+          (_ <> [ getNameProper r.name ])
+          accum
+
+        SrcDecl (CST.DeclNewtype r _ _ _) -> Record.modify
+          (Proxy :: _ "newtypes")
+          (_ <> [ getNameProper r.name ])
+          accum
+
         SrcDecl (CST.DeclType r _ _) -> Record.modify
           (Proxy :: _ "types")
           (_ <> [ getNameProper r.name ])
@@ -167,12 +180,23 @@ getNames =
           (_ <> [ getNameIdent r.label ])
           accum
 
+        SrcDecl (CST.DeclForeign _ _ (CST.ForeignValue (CST.Labeled r))) -> Record.modify
+          (Proxy :: _ "foreignValues")
+          (_ <> [ getNameIdent r.label ])
+          accum
+
+        SrcDecl (CST.DeclForeign _ _ (CST.ForeignData _ _)) -> accum
+
+        SrcDecl (CST.DeclForeign _ _ (CST.ForeignKind _ _)) -> accum
+
         SrcDecl (CST.DeclValue r) -> Record.modify
           (Proxy :: _ "values")
           (_ <> [ getNameIdent r.name ])
           accum
 
-        _ -> accum
+        SrcDecl _ -> accum
+
+        SrcImport _ -> accum
     )
     mempty
 
@@ -184,7 +208,10 @@ matchOnePick pick decl = case pick of
       | name == getNameProper r.name -> [ printTokens all <> "\n" ]
     _ -> []
 
-  PickNewtype { name } -> [] -- TODO
+  PickNewtype { name } -> case decl of
+    SrcDecl all@(CST.DeclNewtype r _ _ _)
+      | name == getNameProper r.name -> [ printTokens all <> "\n" ]
+    _ -> []
 
   PickType { name } -> case decl of
     SrcDecl all@(CST.DeclType r _ _)
@@ -196,14 +223,17 @@ matchOnePick pick decl = case pick of
       | name == getNameIdent r.label -> [ printTokens all ]
     _ -> []
 
-  PickForeign { name } -> [] -- TODO
+  PickForeignValue { name } -> case decl of
+    SrcDecl all@(CST.DeclForeign _ _ (CST.ForeignValue (CST.Labeled r)))
+      | name == getNameIdent r.label -> [ printTokens all <> "\n" ]
+    _ -> []
 
   PickValue { name } -> case decl of
     SrcDecl all@(CST.DeclValue r)
       | name == getNameIdent r.name -> [ printTokens all <> "\n" ]
     _ -> []
 
-  PickExtraTypeRecord { name } -> [] -- TODO
+  PickExtraTypeRecord { name } -> [] -- TODO3
 
   PickExtraValueAndSignature { name } ->
     matchManyPicks
@@ -215,7 +245,7 @@ matchOnePick pick decl = case pick of
   PickExtraSignatureOrForeign { name } ->
     matchManyPicks
       [ PickSignature { name }
-      , PickForeign { name }
+      , PickForeignValue { name }
       ]
       decl
 
@@ -226,7 +256,7 @@ matchOnePick pick decl = case pick of
       , PickNewtype { name }
       , PickType { name }
       , PickSignature { name }
-      , PickForeign { name }
+      , PickForeignValue { name }
       , PickValue { name }
       ]
       decl
@@ -350,7 +380,7 @@ codecPick = CA.codec' dec enc
     , "PickSignature": CAR.record
         { name: CA.string
         }
-    , "PickForeign": CAR.record
+    , "PickForeignValue": CAR.record
         { name: CA.string
         }
     , "PickValue": CAR.record
